@@ -1,0 +1,211 @@
+{
+  "usage": {
+    "first_master_main": [
+      "cdf-all"
+    ],
+    "move_pack": [
+      "infra-common",
+      "infra-master"
+    ],
+    "k8s_master_main": [
+      "infra-common",
+      "infra-master"
+    ],
+    "k8s_worker_main": [
+      "infra-common"
+    ],
+    "byok_cdf": [
+      "cdf-all"
+    ],
+    "first_master_phase2":[
+      "cdf-all"
+    ],
+    "build": [
+      "infra-common",
+      "infra-master",
+      "cdf-all"
+    ],    
+    "shared": [
+      "shared-base",
+      "shared-service"
+    ],
+    "suite": [
+      "suite_dependency"
+    ],
+    "image_properties": [
+      "cdf-all",
+      "suite_dependency"
+    ],
+    "image_exclusive": [
+      "cdf-exclusive"
+    ]
+  },
+  "packages": [
+    {
+      "name": "infra-master",
+      "images": [
+        "IMAGE_ETCD",
+        "IMAGE_KUBE_APISERVER",
+        "IMAGE_KUBE_CONTROLLER_MANAGER",
+        "IMAGE_KUBE_SCHEDULER",
+        "IMAGE_COREDNS",
+        "IMAGE_KEEPALIVED",
+        "IMAGE_METRICS_SERVER",
+        "IMAGE_ITOM_REGISTRY"
+      ]
+    },
+    {
+      "name": "infra-common",
+      "images": [
+        "IMAGE_FLANNEL",
+        "IMAGE_KUBE_PROXY",
+        "IMAGE_ITOM_LOGROTATE",
+        "IMAGE_PAUSE"
+      ]
+    },
+    {
+      "name": "cdf-all",
+      "images": [
+        "IMAGE_APPHUB_APISERVER",
+        "IMAGE_APPHUB_UI",
+        "IMAGE_ITOM_KUBE_STATE_METRICS",
+        "IMAGE_ITOM_PROMETHEUS_CONFIG_RELOADER",
+        "IMAGE_ITOM_PROMETHEUS_OPERATOR",
+        "IMAGE_ITOM_THANOS",
+        "IMAGE_ITOM_RELOADER",
+        "IMAGE_ITOM_GRAFANA",
+        "IMAGE_ITOM_APPHUB_CONFIG",
+        "IMAGE_ITOM_TOOLS_BASE",
+        "IMAGE_ITOM_CDF_ADDNODE",
+        "IMAGE_ITOM_CDF_ADMIN",
+        "IMAGE_ITOM_CDF_APISERVER",
+        "IMAGE_ITOM_CDF_DEPLOYER",
+        "IMAGE_ITOM_CDF_SUITEFRONTEND",
+        "IMAGE_ITOM_FLUENTBIT",
+        "IMAGE_ITOM_IDM",
+        "IMAGE_ITOM_K8S_DASHBOARD_API",
+        "IMAGE_ITOM_K8S_DASHBOARD_WEB",
+        "IMAGE_ITOM_K8S_DASHBOARD_METRICS_SCRAPER",
+        "IMAGE_ITOM_KUBERNETES_LOCAL_STORAGE_PROVISIONER",
+        "IMAGE_ITOM_LOGROTATE",
+        "IMAGE_ITOM_NGINX_INGRESS",
+        "IMAGE_ITOM_PG_BACKUP",
+        "IMAGE_ITOM_POSTGRESQL",
+        "IMAGE_ITOM_PROMETHEUS_CLEANER",
+        "IMAGE_ITOM_PROMETHEUS_EXPORTER_CERT",
+        "IMAGE_ITOM_STUNNEL",
+        "IMAGE_ITOM_K8S_SIDECAR",
+        "IMAGE_KUBERNETES_VAULT_INIT",
+        "IMAGE_KUBERNETES_VAULT_RENEW",
+        "IMAGE_ITOM_PROMETHEUS_ALERTMANAGER",
+        "IMAGE_ITOM_PROMETHEUS_NODE_EXPORTER",
+        "IMAGE_ITOM_PROMETHEUS",
+        "IMAGE_VAULT",
+        "IMAGE_ITOM_NFS_PROVISIONER",
+        "IMAGE_ITOM_VELERO",
+        "IMAGE_ITOM_CLOUDSERVER"
+      ]
+    },
+    {
+      "name": "suite_dependency",
+      "images": [
+        "IMAGE_NGINX",
+        "IMAGE_OPENJDK11",
+        "IMAGE_OPENJDK11_UBI",
+        "IMAGE_OPENJDK",
+        "IMAGE_OPENJDK_UBI",
+        "IMAGE_ITOM_BUSYBOX",
+        "IMAGE_OPENSUSE_BASE",
+        "IMAGE_UBI"
+      ]
+    },
+    {
+      "name": "cdf-exclusive",
+      "description": "images used by cdf only and not shared with suite which can be cleaned during upgrade",
+      "images": [
+        "IMAGE_ETCD",
+        "IMAGE_KUBE_APISERVER",
+        "IMAGE_KUBE_CONTROLLER_MANAGER",
+        "IMAGE_KUBE_SCHEDULER",
+        "IMAGE_COREDNS",
+        "IMAGE_KEEPALIVED",
+        "IMAGE_METRICS_SERVER",
+        "IMAGE_ITOM_REGISTRY",
+        "IMAGE_FLANNEL",
+        "IMAGE_KUBE_PROXY",
+        "IMAGE_PAUSE",
+        "IMAGE_APPHUB_APISERVER",
+        "IMAGE_APPHUB_UI",
+        "IMAGE_ITOM_KUBE_STATE_METRICS",
+        "IMAGE_ITOM_PROMETHEUS_CONFIG_RELOADER",
+        "IMAGE_ITOM_PROMETHEUS_OPERATOR",
+        "IMAGE_ITOM_THANOS",
+        "IMAGE_ITOM_GRAFANA",
+        "IMAGE_ITOM_APPHUB_CONFIG",
+        "IMAGE_ITOM_CDF_ADDNODE",
+        "IMAGE_ITOM_CDF_ADMIN",
+        "IMAGE_ITOM_CDF_APISERVER",
+        "IMAGE_ITOM_CDF_DEPLOYER",
+        "IMAGE_ITOM_CDF_SUITEFRONTEND",
+        "IMAGE_ITOM_K8S_DASHBOARD_API",
+        "IMAGE_ITOM_K8S_DASHBOARD_WEB",
+        "IMAGE_ITOM_K8S_DASHBOARD_METRICS_SCRAPER",
+        "IMAGE_ITOM_PROMETHEUS_CLEANER",
+        "IMAGE_ITOM_PROMETHEUS_EXPORTER_CERT",
+        "IMAGE_ITOM_PROMETHEUS_ALERTMANAGER",
+        "IMAGE_ITOM_PROMETHEUS_NODE_EXPORTER",
+        "IMAGE_ITOM_PROMETHEUS",
+        "IMAGE_ITOM_VELERO",
+        "IMAGE_ITOM_CLOUDSERVER"
+      ]
+    },
+    {
+      "name": "shared-base",
+      "description": "base images used by all the suites",
+      "images": [
+        "IMAGE_NGINX",
+        "IMAGE_NODEJS_UBI8",
+        "IMAGE_NODEJS16_UBI8",
+        "IMAGE_PYTHON_UBI8",
+        "IMAGE_PYTHON38_UBI8",        
+        "IMAGE_PYTHON39_UBI8",
+        "IMAGE_UBI7",
+        "IMAGE_UBI8",        
+        "IMAGE_UBI85",
+        "IMAGE_UBI9", 
+        "IMAGE_OPENJDK_UBI8",
+        "IMAGE_OPENJDK_FULL_UBI8",
+        "IMAGE_OPENJDK11_UBI8",
+        "IMAGE_OPENJDK11_FULL_UBI8",
+        "IMAGE_OPENJDK17_UBI8",
+        "IMAGE_OPENJDK17_FULL_UBI8",
+        "IMAGE_OPENSUSE_BASE",
+        "IMAGE_OPENSUSE_BASE152",
+        "IMAGE_OPENSUSE_BASE153",
+        "IMAGE_OPENJDK",
+        "IMAGE_OPENJDK11",
+        "IMAGE_OPENJDK11_FULL",        
+        "IMAGE_OPENJDK17",
+        "IMAGE_OPENJDK17_FULL"
+      ]
+    },
+    {
+      "name": "shared-service",
+      "description": "image used by shared common service and suite",
+      "images": [
+          "IMAGE_ITOM_RELOADER",
+          "IMAGE_ITOM_TOOLS_BASE",
+          "IMAGE_ITOM_FLUENTBIT",
+          "IMAGE_ITOM_IDM",
+          "IMAGE_ITOM_NGINX_INGRESS",
+          "IMAGE_ITOM_PG_BACKUP",
+          "IMAGE_ITOM_POSTGRESQL",
+          "IMAGE_ITOM_STUNNEL",
+          "IMAGE_KUBERNETES_VAULT_INIT",
+          "IMAGE_KUBERNETES_VAULT_RENEW",
+          "IMAGE_VAULT",
+          "IMAGE_ITOM_BUSYBOX"
+      ]
+    }
+  ]
+}
