@@ -1,0 +1,119 @@
+{
+  "org_name": "hpeswitom",
+  "images": [
+    {
+      "image": "apphub-apiserver:1.9.0-269"
+    },
+    {
+      "image": "apphub-ui:1.9.0-187"
+    },
+    {
+      "image": "itom-kube-state-metrics:1.8.0-0025"
+    },
+    {
+      "image": "itom-prometheus-config-reloader:1.8.0-0027"
+    },
+    {
+      "image": "itom-prometheus-operator:1.8.0-0027"
+    },
+    {
+      "image": "itom-thanos:1.7.0-0028"
+    },
+    {
+      "image": "itom-reloader:1.7.0-0045"
+    },
+    {
+      "image": "itom-grafana:1.14.0-0024"
+    },
+    {
+      "image": "itom-apphub-config:1.10.0-0020"
+    },
+    {
+      "image": "itom-tools-base:1.8.0-0024"
+    },
+    {
+      "image": "itom-cdf-addnode:1.20.0-0024"
+    },
+    {
+      "image": "itom-cdf-admin:1.25.0-0029"
+    },
+    {
+      "image": "itom-cdf-apiserver:1.21.0-00228"
+    },
+    {
+      "image": "itom-cdf-deployer:1.19.0-270"
+    },
+    {
+      "image": "itom-cdf-suitefrontend:1.20.0-0026"
+    },
+    {
+      "image": "itom-fluentbit:1.7.0-0088"
+    },
+    {
+      "image": "itom-idm:1.42.0-379"
+    },
+    {
+      "image": "itom-k8s-dashboard-api:1.4.0-0014"
+    },
+    {
+      "image": "itom-k8s-dashboard-web:1.4.0-0014"
+    },
+    {
+      "image": "itom-k8s-metrics-scraper:1.6.0-0024"
+    },
+    {
+      "image": "itom-kubernetes-local-storage-provisioner:2.9.0-32"
+    },
+    {
+      "image": "itom-logrotate:4.18.0-0029"
+    },
+    {
+      "image": "itom-nginx-ingress:0.29.0-0042"
+    },
+    {
+      "image": "itom-pg-backup:12.3.61"
+    },
+    {
+      "image": "itom-postgresql:16.1.35"
+    },
+    {
+      "image": "itom-prometheus-helper:1.10.0-0021"
+    },
+    {
+      "image": "itom-prometheus-exporter-cert:1.16.0-00101"
+    },
+    {
+      "image": "itom-stunnel:11.16.0-0020"
+    },
+    {
+      "image": "itom-k8s-sidecar:1.8.0-0025"
+    },
+    {
+      "image": "kubernetes-vault-init:0.23.0-0033"
+    },
+    {
+      "image": "kubernetes-vault-renew:0.23.0-0033"
+    },
+    {
+      "image": "itom-prometheus-alertmanager:0.30.0-0026"
+    },
+    {
+      "image": "itom-prometheus-node-exporter:1.8.0-0024"
+    },
+    {
+      "image": "itom-prometheus:2.47.0-0032"
+    },
+    {
+      "image": "vault:0.27.0-0063"
+    },
+    {
+      "image": "itom-nfs-provisioner:1.7.0-0023"
+    },
+    {
+      "image": "itom-velero:1.7.0-00154"
+    },
+    {
+      "image": "itom-cloudserver:8.12.0-00101"
+    }
+  ]
+}
