@@ -1,0 +1,477 @@
+#create cdf deployer service account
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cdf-deployer
+  namespace: {CDF_NAMESPACE}
+
+#create clusterrole for cdf deployer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: microfocus:cdf:itom-cdf-deployer
+rules:
+- apiGroups:    #For prometheus
+  - ""
+  resources:
+  - configmaps
+  - secrets
+  verbs:
+  - '*'
+- apiGroups:    #For prometheus
+  - apps
+  resources:
+  - statefulsets
+  verbs:
+  - '*'
+- apiGroups:    #For prometheus
+  - apiextensions.k8s.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - '*'
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - cronjobs
+  - endpoints
+  - events
+  - jobs
+  - nodes
+  - persistentvolumeclaims
+  - persistentvolumes
+  - pods
+  - replicationcontrollers
+  - secrets
+  - serviceaccounts
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - admissionregistration.k8s.io
+  resources:
+  - mutatingwebhookconfigurations
+  - validatingwebhookconfigurations
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apiregistration.k8s.io
+  resources:
+  - apiservices
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+- apiGroups:
+  - extensions
+  - policy
+  resources:
+  - podsecuritypolicies
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - use         #For prometheus
+  - watch
+- apiGroups:    #For itom-k8s-dashboard
+  - metrics.k8s.io
+  resources:
+  - nodes
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterroles
+  - clusterrolebindings
+  - rolebindings
+  - roles
+  verbs:   # use '*' as verb because k8s-dashborad need to bind cluster-admin clusterrole
+  - '*'
+- apiGroups:
+  - scheduling.k8s.io
+  resources:
+  - priorityclasses
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - volumeattachments
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - cronjobs
+  - jobs
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - extensions
+  - networking.k8s.io
+  resources:
+  - ingresses
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - extensions
+  - networking.k8s.io
+  resources:
+  - ingressclasses
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - patch
+  - update
+  - delete
+- apiGroups:
+  - apps
+  - extensions
+  resources:
+  - daemonsets
+  - deployments
+  - replicasets
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - settings.k8s.io
+  resources:
+  - podpresets
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - controllerrevisions
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - autoscaling
+  resources:
+  - horizontalpodautoscalers
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - "coordination.k8s.io"
+  resources:
+  - leases
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - certificates.k8s.io
+  resources:
+  - certificatesigningrequests
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - resourcequotas
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - limitranges # Required by SMA
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - extensions
+  - networking.k8s.io
+  resources:
+  - networkpolicies
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:    #For prometheus
+  - monitoring.coreos.com
+  resources:
+  - alertmanagers
+  - prometheuses
+  - thanosrulers
+  - prometheuses/finalizers
+  - alertmanagers/finalizers
+  - thanosrulers/finalizers
+  - servicemonitors
+  - podmonitors
+  - prometheusrules
+  - podmonitors
+  verbs:
+  - '*'
+- nonResourceURLs: #For prometheus
+  - /metrics
+  verbs:
+  - get
+- apiGroups:
+  - apps
+  - extensions
+  resources:
+  - daemonsets/status
+  - deployments/status
+  - replicasets/status
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - apps
+  resources:
+  - statefulsets/status
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - extensions
+  - networking.k8s.io
+  resources:
+  - ingresses/status
+  verbs:
+  - update
+- apiGroups:
+  - "batch"
+  resources:
+  - jobs/status
+  verbs:
+  - get
+  - list
+- apiGroups:  #for cdf-apiserver
+  - ""
+  resources:
+  - jobs/status
+  - namespaces/status
+  - nodes/stats
+  - nodes/status
+  - persistentvolumeclaims/status
+  - persistentvolumes/status
+  - pods/log
+  - pods/status
+  - replicationcontrollers/status
+  - services/status
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - ""
+  resources:
+  - nodes/metrics
+  - nodes/proxy
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - services/finalizers
+  verbs:
+  - get
+  - create
+  - update
+  - delete
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+#{FOR_OPENSHIFT}- apiGroups:
+#{FOR_OPENSHIFT}  - route.openshift.io
+#{FOR_OPENSHIFT}  resources:
+#{FOR_OPENSHIFT}  - routes
+#{FOR_OPENSHIFT}  - routes/custom-host
+#{FOR_OPENSHIFT}  verbs:
+#{FOR_OPENSHIFT}  - create
+#{FOR_OPENSHIFT}  - delete
+#{FOR_OPENSHIFT}  - deletecollection
+#{FOR_OPENSHIFT}  - get
+#{FOR_OPENSHIFT}  - list
+#{FOR_OPENSHIFT}  - patch
+#{FOR_OPENSHIFT}  - update
+#{FOR_OPENSHIFT}  - watch
+
+---
+#create cluster rolebinding for cdf deployer
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: microfocus:cdf:itom-cdf-deployer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: microfocus:cdf:itom-cdf-deployer
+subjects:
+- kind: ServiceAccount
+  name: cdf-deployer
+  namespace: {CDF_NAMESPACE}

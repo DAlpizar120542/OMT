@@ -1,0 +1,152 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: itom-cdf-deployer{DEPLOYER_JOB_TAG}
+  namespace: {KUBE_SYSTEM_NAMESPACE}
+  labels:
+    app: itom-cdf-deployer-app
+  annotations:
+    deployment.microfocus.com/simple-update: ignore
+spec:
+  ttlSecondsAfterFinished: 172800
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app: itom-cdf-deployer-app
+      annotations:
+        pod.boostport.com/vault-approle: {KUBE_SYSTEM_NAMESPACE}-{BASEINFRA_VAULT_APPROLE}
+        pod.boostport.com/vault-init-container: install
+    spec:
+      hostname: itom-cdf-deployer
+      serviceAccountName: cdf-deployer
+      imagePullSecrets:
+        - name: registrypullsecret
+      containers:
+      - image: {REGISTRY_URL}/{REGISTRY_ORGNAME}/{IMAGE_ITOM_CDF_DEPLOYER}
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        imagePullPolicy: IfNotPresent
+        name: itom-cdf-deployer
+        envFrom:
+        - configMapRef:
+            name: images-configmap
+        envFrom:
+        - configMapRef:
+            name: default-database-configmap
+        env:
+        - name: K8S_INSTALL_MODE
+          value: "{K8S_INSTALL_MODE}"
+        - name: CDF_ADMIN_TASKS
+          value: "{CDF_ADMIN_TASKS}"
+        - name: DEFAULT_STORAGE_CLASS
+          value: "{DEFAULT_STORAGE_CLASS}"
+        - name: ACTION_MODE
+          value: "INSTALL"
+        - name: DOCKER_REPOSITORY
+          value: "{REGISTRY_URL}"
+        - name: EXTERNAL_ACCESS_HOST
+          value: "{EXTERNAL_ACCESS_HOST}"
+        - name: EXTERNAL_ACCESS_PORT
+          value: "{EXTERNAL_ACCESS_PORT}"
+        - name: SUITE_NAME
+          value: "{SUITE_NAME}"
+        - name: SYSTEM_USER_ID
+          value: "{SYSTEM_USER_ID}"
+        - name: SYSTEM_GROUP_ID
+          value: "{SYSTEM_GROUP_ID}"
+        - name: REGISTRY_ORGNAME
+          value: "{REGISTRY_ORGNAME}"
+        - name: REGISTRY_PULL_SECRET
+          value: "registrypullsecret"
+        - name: CLOUD_PROVIDER
+          value: "{CLOUD_PROVIDER}"
+        - name: ALICLOUD_LOADBALANCER_ID
+          value: "{ALICLOUD_LOADBALANCER_ID}"
+        - name: ETCD_ENDPOINT
+          value: "{ETCD_ENDPOINT}"
+        - name: MASTERNODE_TIME_ZONE
+          value: "{MASTERNODE_TIME_ZONE}"
+        - name: K8S_HOME
+          value: "{K8S_HOME}"
+        - name: DEPLOYMENT_LOG_LOCATION
+          value: "{DEPLOYMENT_LOG_LOCATION}"
+        - name: LOADBALANCER_IP
+          value: "{LOADBALANCER_IP}"
+        - name: LOADBALANCER_INFO
+          value: "{LOADBALANCER_INFO}"
+        - name: ENABLE_FIPS
+          value: "{ENABLE_FIPS}"
+        - name: LOGGING_VOL_SIZE
+          value: "{LOGGING_VOL_SIZE}"
+        - name: DEPLOYMENT_NAME
+          value: "{DEPLOYMENT_NAME}"
+        - name: DEPLOYMENT_UUID
+          value: "{DEPLOYMENT_UUID}"
+        - name: DEPLOYMENT_TYPE
+          value: "{DEPLOYMENT_TYPE}"
+        - name: DEPLOYMENT_MODE
+          value: "{DEPLOYMENT_MODE}"
+        - name: CDF_PHASE
+          value: "{CDF_PHASE}"
+        - name: CLUSTER_NAME
+          value: "{CLUSTER_NAME}"
+        - name: PRIMARY_NAMESPACE
+          value: "{PRIMARY_NAMESPACE}"
+        - name: SUITE_NAMESPACE
+          value: "{SUITE_NAMESPACE}"
+        - name: INGRESS_SSL_PORT
+          value: "{INGRESS_SSL_PORT}"
+        - name: INGRESS_2WAY_SSL_PORT
+          value: "{INGRESS_2WAY_SSL_PORT}"
+        - name: PRIMARY_EXTERNAL_ACCESS_HOST
+          value: "{PRIMARY_EXTERNAL_ACCESS_HOST}"
+        - name: PRIMARY_EXTERNAL_ACCESS_PORT
+          value: "{PRIMARY_EXTERNAL_ACCESS_PORT}"
+        - name: MY_POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: PLATFORM_VERSION
+          value: "{PLATFORM_VERSION}"
+        resources:
+          limits:
+            cpu: "1"
+            memory: 2Gi
+          requests:
+            cpu: 200m
+            memory: 200Mi
+        volumeMounts:
+        - mountPath: /coreVolumeRoot
+          name: core-volume
+        - mountPath: /apiVersion
+          name: k8s-object-mapping
+        - mountPath: /tmp
+          name: tmp
+        - mountPath: /components
+          name: components
+      restartPolicy: Never
+      securityContext:
+        runAsUser: {SYSTEM_USER_ID}
+        runAsGroup: {SYSTEM_GROUP_ID}
+        fsGroup: {SYSTEM_GROUP_ID}
+        supplementalGroups: [{SYSTEM_GROUP_ID}]
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+      - name: core-volume
+        persistentVolumeClaim:
+          claimName: itom-vol-claim
+      - name: k8s-object-mapping
+        configMap:
+          name: k8s-object-mapping
+      - name: tmp
+        emptyDir: {}
+      - name: components
+        emptyDir: {}

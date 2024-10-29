@@ -1,0 +1,34 @@
+[
+    {
+        "feature": "MultipleDeployment",
+        "default": false,
+        "stage": "Alpha",
+        "since": "2019.08",
+        "until": "2021.02",
+        "display": false
+    },
+    {
+        "feature": "AppHub",
+        "default": false,
+        "stage": "Alpha",
+        "since": "2021.02",
+        "until": "2021.02",
+        "display": false
+    },
+    {
+        "feature": "Prometheus",
+        "default": false,
+        "stage": "Alpha",
+        "since": "2020.05",
+        "until": "2021.02",
+        "display": false
+    },
+    {
+        "feature": "AppHubUI",
+        "default": true,
+        "stage": "Alpha",
+        "since": "2021.05",
+        "until": "",
+        "display": true
+    }
+]

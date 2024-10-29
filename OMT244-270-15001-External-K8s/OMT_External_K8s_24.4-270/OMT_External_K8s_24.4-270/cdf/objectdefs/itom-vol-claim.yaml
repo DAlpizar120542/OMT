@@ -1,0 +1,18 @@
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: itom-vol-claim
+  namespace: {CDF_NAMESPACE}
+  labels:                                      #{pv-admin-need-remove-it}
+    pv_pvc_label: "{PV_PVC_LABEL_VALUE}"       #{pv-admin-need-remove-it}
+spec:
+  accessModes:
+    - {PERSISTENCE_ACCESS_MODE}
+  storageClassName: "{DEFAULT_STORAGE_CLASS}"
+  resources:
+    requests:
+      storage: "{DATA_VOLUME_SIZE}"
+  selector:                                    #{pv-admin-need-remove-it}
+    matchLabels:                               #{pv-admin-need-remove-it}
+      pv_pvc_label: "{PV_PVC_LABEL_VALUE}"     #{pv-admin-need-remove-it}

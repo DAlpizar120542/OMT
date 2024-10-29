@@ -1,0 +1,218 @@
+acceptEula: true
+global:
+# ------BEGIN TLS------
+  tls:
+    tlsMinVersion: {tlsMinVersion}
+    tlsCiphers: [{tlsCiphers}]
+# ------END TLS------
+  services:
+    deploymentManagement: {deploymentManagement}
+    suiteDeploymentManagement: {suiteDeploymentManagement}
+    clusterManagement: {clusterManagement}
+    monitoring: {monitoring}
+    logCollection: {logCollection}
+  rbac:
+    clusterRoleCreate: {clusterRoleCreate}
+  prometheus:
+    deployPrometheusConfig: {monitoringContent}
+    deployGrafanaConfig: {monitoringContent}
+# ------BEGIN featureGates------
+  featureGates:
+    appHubUI: {appHubUI}
+# ------END featureGates------
+# ------BEGIN nodeSelector------
+  nodeSelector:
+    {nodeSelector.keys.values}
+# ------END nodeSelector------
+  apphubAdmin:
+    userPassword: {userPassword}
+# ------BEGIN ipv6------
+  expose:
+    ipConfig:
+      ipFamilyPolicy: PreferDualStack
+# ------END ipv6------
+  cluster:
+    name: {cluster.name}
+    awsEip: {awsEip}
+    awsRegion: {awsRegion}
+    managedResources:
+      clusterRoles: {manageClusterRoles}
+      namespaces: {manageNamespaces}
+      nodes: {manageNodes}
+      persistentVolumes: {managePersistVolumes}
+      priorityClasses: {managePriorityClasses}
+    k8sProvider: {k8sProvider}
+# ------BEGIN tolerations------
+    tolerations:
+    - effect: NoSchedule
+      key: node-role.kubernetes.io/control-plane
+      operator: Exists
+# ------END tolerations------
+  docker:
+    imagePullSecret: {imagePullSecret}
+    orgName: {docker.orgName}
+    registry: {docker.registry}
+    tlsCert: {docker.tlsCert}
+  enableFIPS: {fipsMode}
+  externalAccessHost: {externalAccessHost}
+  externalAccessPort: {externalAccessPort}
+  externalAccessCertPort: {externalAccessCertPort}
+  persistence:
+    storageClasses:
+      default-rwx: {storageClasses.default}
+      {storageClasses.keys.values}
+    logVolumeClaim: itom-logging-vol
+    dataVolumeClaim: itom-vol-claim
+    dbVolumeClaim: db-single-vol
+# ------BEGIN proxy------
+  proxy:
+    httpsProxy: "{httpsProxy}"
+    httpProxy: "{httpProxy}"
+    noProxy: "{noProxy}"
+# ------END proxy------
+  loadBalancer:
+    ip: {loadBalancerIP}
+    annotations:
+      cdf.ingress.deployments.microfocus.com/creator: "install"
+      service.beta.kubernetes.io/alicloud-loadbalancer-id: {loadbalancerId}
+      service.beta.kubernetes.io/aws-load-balancer-type: {awsLoadbalancerType}
+      service.beta.kubernetes.io/aws-load-balancer-internal: "{awsLoadbalancerInternal}"
+      service.beta.kubernetes.io/azure-load-balancer-internal: "{azureLoadbalancerInternal}"
+      {loadBalancer.annotations.keys.values}
+    sourceRanges: [{loadBalancer.sourceRanges}]
+  securityContext:
+    fsGroup: "{securityContext.fsGroup}"
+    user: "{securityContext.user}"
+  setFqdnInIngress: {setFqdnInIngress}
+  vault:
+    realmList: "{vault.realmList}"
+frontendIngress:
+  nginx:
+    secretAnnotations:
+      deployment.microfocus.com/owner: renewCert
+# ------BEGIN frontendIngress------
+# ------BEGIN AWS_LB_ingress------
+    ingress:
+      enabled: {clusterWideIngress}
+      certificateArn: {awsCertificateArn}
+# ------END AWS_LB_ingress------
+    service:
+      external:
+        type: {frontendIngress.external.type}
+        nodePortAutoAssign: {nodePortAutoAssign}
+# ------END frontendIngress------
+# ------BEGIN vault------
+vault:
+  vault:
+    deploymentType: {vault.deploymentType}
+    vaultBackend: {vault.vaultBackend}
+# ------END vault------
+# ------BEGIN cdfapiserver------
+cdfapiserverdb:
+  enabled: {cdfapiserverdb.enabled}
+  persistence:
+    dbVolumeClaim: itom-vol-claim
+cdfapiserver:
+  nfsProvisioner: {nfsProvisioner}
+  timezone: {timezone}
+  cdfApi:
+    skipCheckOnNodeLost: {skipCheckOnNodeLost}
+  deployment:
+    podStartLimit: {cdfapiserver.podStartLimit}
+    uuid: {deploymentUuid}
+    name: {deploymentName}
+    database:
+      tlsSkipHostnameVerification: {tlsSkipHostnameVerification}
+      dbUrl: {cdfapiserver.dbUrl}
+      user: {cdfapiserver.user}
+      userPassword: {cdfapiserver.userPassword}
+      tlsCert: {cdfapiserver.tlsCert}
+      tlsEnabled: {cdfapiserver.tlsEnabled}
+      internal: {cdfapiserver.internal}
+# ------END cdfapiserver------
+# ------BEGIN portalIngress------
+portalIngress:
+  componentName: itom-cdf-ingress
+  namePrefix: portal
+  nginx:
+    secretAnnotations:
+      deployment.microfocus.com/owner: renewCert
+# ------BEGIN AWS_LB_ingress------
+    ingress:
+      enabled: {clusterWideIngress}
+      certificateArn: {awsCertificateArn}
+# ------END AWS_LB_ingress------
+    defaultBackendService: "mng-portal"
+    annotationPrefix: ingress.kubernetes.io
+    secretName: nginx-default-secret
+    service:
+      httpsPort: {externalAccessPort}
+      external:
+        type: {portalIngress.external.type}
+        nodePortAutoAssign: {nodePortAutoAssign}
+  accessLog:
+    size: "10M"
+    rotate: "5"
+# ------END portalIngress------
+# ------BEGIN apphubApiserver------
+apphub-apiserver:
+  deployment:
+    requireClusterAdmin: {requireClusterAdmin}
+# ------END apphubApiserver------
+# ------BEGIN CAPS_LOG_COLLECTION------
+fluentd:
+  logging:
+    input:
+      dataDir: {logging.input.dataDir}
+      hostLogDir:
+        # for classic mode, it's /opt/kubernetes/data
+        runtimeLog: {logging.hostLogDir.runtimeLog}
+        # for classic mode, it's /opt/kubernetes/log
+        cdfLog: {logging.hostLogDir.cdfLog}
+    # ------BEGIN fluentd.logging.output------
+    output:
+      storageLimitSize: {logging.input.storageLimitSize}
+      receiver:
+        url: {logging.receiver.url}
+        # according to FLUENTD_LOG_RECEIVER_PASSWORD_KEY to get the password
+        user: {logging.receiver.user}
+        password: {logging.receiver.password}
+        token: {logging.receiver.token}
+        # Since certificate would be base64 encoded, please replace FLUENTD_LOG_RECEIVER_CA by plaintext
+        caCert: "{logging.receiver.caCert}"
+        type: "{logging.receiver.type}"
+        format: "{logging.receiver.format}"
+        delimiter: "{logging.receiver.delimiter}"
+        # ------BEGIN elasticSearch.cloud.config------
+        elasticSearch:
+          esCloud:
+            cloudId: "{elasticSearch.cloudId}"
+        # ------END elasticSearch.cloud.config------
+    # ------END fluentd.logging.output------
+# ------END CAPS_LOG_COLLECTION------
+# ------BEGIN CAPS_MONITORING------
+prometheus:
+  prometheus:
+    prometheusSpec:
+      # ------BEGIN etcdClientCert------
+      volumes:
+      - name: etcd-client-cert
+        secret:
+          defaultMode: 420
+          secretName: etcd-client-cert
+      volumeMounts:
+      - name: etcd-client-cert
+        mountPath: /var/run/secrets/etcd-client-cert
+        readOnly: true
+      # ------END etcdClientCert------
+      externalLabels:
+        cluster: {cluster.name}
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            storageClassName: {storageClasses.default}
+  # ------BEGIN etcdClientCert------
+  kubeEtcd:
+    enabled: true
+  # ------END etcdClientCert------
+# ------END CAPS_MONITORING------

@@ -1,0 +1,291 @@
+{
+  "specVersion": "",
+  "cdfFeatureSet": [
+    {
+      "id": "CDF-CORE",
+      "clusterFeatureSet": true,
+      "name": "<<CDF_CORE_NAME>>",
+      "description": "<<CDF_CORE_DESC>>",
+      "display": false,
+      "selected": true,
+      "volumeRef": [
+        "itom-vol-claim"
+      ],
+      "images": [
+        {
+          "image": "{IMAGE_ITOM_IDM}"
+        },
+        {
+          "image": "{IMAGE_ITOM_POSTGRESQL}"
+        },
+        {
+          "image": "{IMAGE_ITOM_APPHUB_CONFIG}"
+        }
+      ]
+    },
+    {
+      "id": "PORTAL",
+      "clusterFeatureSet": true,
+      "name": "<<CDF_CORE_NAME>>",
+      "description": "<<CDF_CORE_DESC>>",
+      "display": false,
+      "selected": true,
+      "volumeRef": [
+        "itom-vol-claim"
+      ],
+      "images": [
+        {
+          "image": "{IMAGE_ITOM_CDF_ADMIN}"
+        },
+        {
+          "image": "{IMAGE_ITOM_K8S_DASHBOARD_WEB}"
+        },
+        {
+          "image": "{IMAGE_ITOM_K8S_DASHBOARD_API}"
+        }
+      ]
+    },
+    {
+      "id": "IDM",
+      "clusterFeatureSet": false,
+      "name": "<<CDF_CORE_NAME>>",
+      "description": "<<CDF_CORE_DESC>>",
+      "display": false,
+      "selected": true,
+      "volumeRef": [
+        "itom-logging-vol"
+      ],
+      "images": [
+        {
+          "image": "{IMAGE_ITOM_IDM}"
+        }
+      ]
+    },
+    {
+      "id": "EMBDBNOHA",
+      "clusterFeatureSet": false,
+      "name": "<<CDF_EMBDB_NOHA_NAME>>",
+      "description": "<<CDF_EMBDB_NOHA_DESC>>",
+      "volumeRef": [
+        "db-single-vol"
+      ],
+      "display": false,
+      "selected": false,
+      "images": [
+        {
+          "image": "{IMAGE_ITOM_POSTGRESQL}"
+        }
+      ]
+    },
+    {
+      "id": "EMBDBHA",
+      "clusterFeatureSet": false,
+      "name": "<<CDF_EMBDB_HA_NAME>>",
+      "description": "<<CDF_EMBDB_HA_DESC>>",
+      "volumeRef": [
+        "db-node1-vol",
+        "db-node2-vol"
+      ],
+      "display": false,
+      "selected": false,
+      "images": [
+        {
+          "image": "{IMAGE_ITOM_POSTGRESQL}"
+        }
+      ]
+    },
+    {
+      "id": "Logrotate",
+      "clusterFeatureSet": true,
+      "name": "<<CDF_LOGROTATE_NAME>>",
+      "description": "<<CDF_LOGROTATE_DESC>>",
+      "volumeRef": [],
+      "display": false,
+      "selected": true,
+      "images": []
+    },
+    {
+      "id": "Fluentd",
+      "clusterFeatureSet": true,
+      "name": "<<CDF_FLUENTD_NAME>>",
+      "description": "<<CDF_FLUENTD_DESC>>",
+      "volumeRef": [
+        "itom-logging-vol"
+      ],
+      "display": false,
+      "selected": true,
+      "images": []
+    },
+    {
+      "id": "Nginx-ingress",
+      "clusterFeatureSet": true,
+      "name": "<<CDF_NGINX_INGRESS_NAME>>",
+      "description": "<<CDF_NGINX_INGRESS_DESC>>",
+      "volumeRef": [],
+      "display": false,
+      "selected": true,
+      "images": [
+        {
+          "image": "{IMAGE_ITOM_NGINX_INGRESS}"
+        }
+      ]
+    },
+    {
+      "id": "DBBACKUP",
+      "clusterFeatureSet": false,
+      "name": "<<CDF_DB_BACKUP_NAME>>",
+      "description": "<<CDF_DB_BACKUP_DESC>>",
+      "volumeRef": [],
+      "display": false,
+      "selected": true,
+      "images": [
+        {
+          "image": "{IMAGE_ITOM_PG_BACKUP}"
+        }
+      ]
+    },
+    {
+      "id": "Prometheus",
+      "clusterFeatureSet": true,
+      "name": "<<CDF_PROMETHEUS_NAME>>",
+      "description": "<<CDF_PROMETHEUS_DESC>>",
+      "display": false,
+      "selected": "{FEATUREGATE_PROMETHEUS}",
+      "volumeRef": [
+        "itom-monitor-vol"
+      ],
+      "images": [
+        {"image": "{IMAGE_ITOM_K8S_SIDECAR}"},
+        {"image": "{IMAGE_ITOM_GRAFANA}"},
+        {"image": "{IMAGE_ITOM_KUBE_STATE_METRICS}"},
+        {"image": "{IMAGE_ITOM_PROMETHEUS_CONFIG_RELOADER}"},
+        {"image": "{IMAGE_ITOM_PROMETHEUS_OPERATOR}"},
+        {"image": "{IMAGE_ITOM_PROMETHEUS}"},
+        {"image": "{IMAGE_ITOM_PROMETHEUS_ALERTMANAGER}"},
+        {"image": "{IMAGE_ITOM_KUBE_WEBHOOK_CERTGEN}"},
+        {"image": "{IMAGE_ITOM_PROMETHEUS_NODE_EXPORTER}"},
+        {"image": "{IMAGE_ITOM_THANOS}"},
+        {"image": "{IMAGE_ITOM_STUNNEL}"},
+        {"image": "{IMAGE_ITOM_PROMETHEUS_CLEANER}"},
+        {"image": "{IMAGE_ITOM_PROMETHEUS_EXPORTER_CERT}"}
+     ]
+   },
+   {
+      "id": "AppHub",
+      "clusterFeatureSet": true,
+      "name": "<<CDF_APPHUB_NAME>>",
+      "description": "<<CDF_APPHUB_DESC>>",
+      "display": false,
+      "selected": "{FEATUREGATE_APPHUB}",
+      "volumeRef": [],
+      "images": [
+        {"image": "{IMAGE_APPHUB_APISERVER}"},
+        {"image": "{IMAGE_APPHUB_UI}"}
+     ]
+   }
+  ],
+  "cdfVolume": [
+    {
+      "name": "itom-vol-claim",
+      "size": {
+        "SMALL": "5Gi",
+        "MEDIUM": "10Gi",
+        "LARGE": "20Gi"
+      },
+      "storageClass":{
+        "name":"{DEFAULT_STORAGE_CLASS}",
+        "displayName":"<<cdf-default>>"
+      },
+      "createPVC":true,
+      "access_mode": "ReadWriteMany",
+      "reclaim_policy": "Retain",
+      "description": "<<CDF_CORE_VOLUME_DESC>>",
+      "performance": "fast"
+    },
+    {
+      "name": "db-single-vol",
+      "size": {
+        "SMALL": "5Gi",
+        "MEDIUM": "10Gi",
+        "LARGE": "20Gi"
+      },
+      "storageClass":{
+        "name":"{DEFAULT_STORAGE_CLASS}",
+        "displayName":"<<cdf-default>>"
+      },
+      "createPVC":true,
+      "access_mode": "ReadWriteMany",
+      "reclaim_policy": "Retain",
+      "description": "<<CDF_DB_VOL_SINGLE>>",
+      "performance": "fast"
+    },
+    {
+      "name": "db-node1-vol",
+      "size": {
+        "SMALL": "5Gi",
+        "MEDIUM": "10Gi",
+        "LARGE": "20Gi"
+      },
+      "storageClass":{
+        "name":"{DEFAULT_STORAGE_CLASS}",
+        "displayName":"<<cdf-default>>"
+      },
+      "createPVC":true,
+      "access_mode": "ReadWriteMany",
+      "reclaim_policy": "Retain",
+      "description": "<<CDF_DB_VOL_1>>",
+      "performance": "fast"
+    },
+    {
+      "name": "db-node2-vol",
+      "size": {
+        "SMALL": "5Gi",
+        "MEDIUM": "10Gi",
+        "LARGE": "20Gi"
+      },
+      "storageClass":{
+        "name":"{DEFAULT_STORAGE_CLASS}",
+        "displayName":"<<cdf-default>>"
+      },
+      "createPVC":true,
+      "access_mode": "ReadWriteMany",
+      "reclaim_policy": "Retain",
+      "description": "<<CDF_DB_VOL_2>>",
+      "performance": "fast"
+    },
+    {
+      "name": "itom-logging-vol",
+      "size": {
+        "SMALL": "5Gi",
+        "MEDIUM": "5Gi",
+        "LARGE": "5Gi"
+      },
+      "storageClass":{
+        "name":"{DEFAULT_STORAGE_CLASS}",
+        "displayName":"<<cdf-default>>"
+      },
+      "createPVC":true,
+      "access_mode": "ReadWriteMany",
+      "reclaim_policy": "Retain",
+      "description": "<<ITOM_LOGGING_VOLUME_DESC>>",
+      "performance": "fast"
+    },
+    {
+      "name": "itom-monitor-vol",
+      "size": {
+        "SMALL": "2Gi",
+        "MEDIUM": "2Gi",
+        "LARGE": "2Gi"
+      },
+      "storageClass":{
+        "name":"{DEFAULT_STORAGE_CLASS}",
+        "displayName":"<<cdf-default>>"
+      },
+      "createPVC":false,
+      "access_mode": "ReadWriteMany",
+      "reclaim_policy": "Retain",
+      "description": "<<ITOM_MONITOR_VOLUME_DESC>>",
+      "performance": "fast"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-dns
+  namespace: {CDF_NAMESPACE}
+spec:
+  type: ExternalName
+  externalName: kube-dns.kube-system.svc.cluster.local

@@ -1,0 +1,17 @@
+---
+kind: PersistentVolume
+apiVersion: v1
+metadata:
+  name: itom-vol
+  labels:
+    pv_pvc_label: "{PV_PVC_LABEL_VALUE}"
+spec:
+  capacity:
+    storage: "{DATA_VOLUME_SIZE}"
+  accessModes:
+    - {PERSISTENCE_ACCESS_MODE}
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: "{DEFAULT_STORAGE_CLASS}"
+  nfs:
+    path: {NFS_FOLDER}
+    server: "{NFS_SERVER}"

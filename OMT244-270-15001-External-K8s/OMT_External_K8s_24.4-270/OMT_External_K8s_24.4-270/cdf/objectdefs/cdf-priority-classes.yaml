@@ -1,0 +1,55 @@
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: cdf-highest-priority
+value: -1000000
+globalDefault: false
+---
+
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: cdf-high-priority
+value: -1001000
+globalDefault: false
+---
+
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: cdf-medium-high-priority
+value: -1002000
+globalDefault: false
+---
+
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: cdf-medium-priority
+value: -1003000
+globalDefault: false
+---
+
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: cdf-medium-low-priority
+value: -1004000
+globalDefault: false
+---
+
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: cdf-low-priority
+value: -1005000
+globalDefault: false
+---
+
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: cdf-lowest-priority
+value: -1006000
+globalDefault: false
+---
