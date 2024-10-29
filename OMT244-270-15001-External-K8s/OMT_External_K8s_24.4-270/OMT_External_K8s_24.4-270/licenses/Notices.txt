@@ -1,0 +1,298 @@
+####   angularjs
+1. Shipped with binary angular 1.8.2. which is derived from (https://github.com/angular/angular.js) for fixing CVE-2022-25844.  
+  Modified Files:
+     src/ng/filter/filters.js
+
+####   cloudserver
+1. Shipped with image itom-cloudserver:8.10.0-x which is derived from (https://github.com/scality/cloudserver)
+  Modified Files:
+     config.json
+     package.json
+     yarn.lock
+     lib/Config.js
+     lib/server.js
+     lib/services.js
+     lib/api/bucketPutCors.js
+     lib/api/multiObjectDelete.js
+     lib/api/apiUtils/object/storeObject.js
+     lib/kms/wrapper.js
+     lib/routes/routeBackbeat.js
+     lib/routes/veeam/utils.js
+     bin/create_encrypted_bucket.js
+     bin/search_bucket.js
+
+####   docker-registry
+1. Shipped with registry derived from docker registry 2.8.x (https://github.com/distribution/distribution)
+  Added or Modified Files:
+    registry/auth/htpasswd/access.go
+    registry/auth/htpasswd/htpasswd.go
+    registry/auth/token/accesscontroller.go
+    registry/auth/token/tokenserver/config.go
+    registry/auth/token/tokenserver/configSet.go
+    registry/auth/token/tokenserver/genToken.go
+    registry/auth/token/tokenserver/model.go
+    registry/auth/token/tokenserver/service.go
+    registry/auth/token/tokenserver/validatetoken.go
+    registry/auth/token/util.go
+    registry/client/repository.go
+    registry/handlers/app.go
+    registry/handlers/manifests.go
+    registry/handlers/token.go
+    registry/registry/registry.go
+    registry/storage/blobstore.go
+    registry/storage/cache/cachedblobdescriptorstore.go
+    registry/storage/cache/memory/memory.go
+    registry/storage/driver/base/base.go
+    registry/storage/driver/filesystem/driver.go
+    registry/storage/driver/middleware/alicdn/middleware.go
+
+####   etcd
+1. Shipped with etcdctl/etcd binaries based on etcd v3.5 which is derived from https://github.com/etcd-io/etcd
+Modified Files:
+    etcdctl/go.mod
+    etcdctl/go.sum
+    go.mod
+    go.sum
+    server/go.mod
+    server/go.sum
+
+####   flyway-core
+1. Shipped with flyway-core-9.21.x derived from flyway-core-9.21.x, flyway-core-7.11.x-<build> derived from flyway-core-7.11.x, flyway-core-6.5.x-<build> derived from flyway-core-6.5.x, flyway-core-5.2.x-<build> derived from flyway-5.2.x (https://github.com/flyway/flyway)
+  Modified Files:
+   flyway-core/src/main/java/org/flywaydb/core/internal/database/base/Database.java
+   pom.xml
+         protected final void ensureDatabaseIsRecentEnough(String oldestSupportedVersion) {
+-        if (!getVersion().isAtLeast(oldestSupportedVersion)) {
+-            throw new FlywayDbUpgradeRequiredException(
+-                    databaseType,
+-                    computeVersionDisplayName(getVersion()),
+-                    computeVersionDisplayName(MigrationVersion.fromVersion(oldestSupportedVersion)));
+-        }
++        //Ingore database check
+     }
+
+     protected final void ensureDatabaseNotOlderThanOtherwiseRecommendUpgradeToFlywayEdition(String oldestSupportedVersionInThisEdition,
+                                                                                            Edition editionWhereStillSupported) {
+-        if (!getVersion().isAtLeast(oldestSupportedVersionInThisEdition)) {
+-            throw new FlywayEditionUpgradeRequiredException(
+-                    editionWhereStillSupported,
+-                    databaseType,
+-                    computeVersionDisplayName(getVersion()));
+-        }
++        //Ingore database check                                                                                    Edition editionWhereStillSupported) {
+     }
+
+
+
+####   ingress-controller
+1. Shipped with the ctr binary based on containerd v1.5.1 which is derived from (https://github.com/kubernetes/ingress-nginx)
+  Added or Modified Files:
+  internal/ingress/controller/store/store.go
+			if !icConfig.IgnoreIngressClass {
+				_, errOld = store.GetIngressClass(oldIng, icConfig)
+				classCur, errCur = store.GetIngressClass(curIng, icConfig)
+			}
+			if errOld != nil && errCur == nil {
+			_, errOld = store.GetIngressClass(oldIng, icConfig)
+			classCur, errCur = store.GetIngressClass(curIng, icConfig)
+
+			if errCur != nil && errOld != nil {
+				klog.InfoS("Ignoring ingress because of error while validating ingress class", "ingress", klog.KObj(curIng), "error", errCur)
+				return
+			} else if errOld != nil && errCur == nil {
+  rootfs/etc/nginx/template/nginx.tmpl
+  go.mod
+  go.sum
+
+####   kube-state-metrics
+1. Shipped with kube-state-metrics binaries which is derived from https://github.com/kubernetes/kube-state-metrics
+Modified Files:
+    go.mod
+    go.sum
+
+####   kubernetes-dashboard
+1. Shipped with image itom-k8s-dashboard-web:1.x.x. which is derived from (https://github.com/kubernetes/dashboard)
+  Added or Modified Files:
+    modules/web/src/assets/pages/logout.html
+    modules/web/src/chrome/userpanel/component.ts
+    modules/web/src/common/services/global/authentication.ts
+    modules/web/src/common/services/global/cancelhttp.ts
+    modules/web/src/common/services/global/csrftoken.ts
+    modules/web/src/common/services/global/interceptor.ts
+    modules/web/src/common/services/global/me.ts
+    modules/web/src/common/services/global/module.ts
+    modules/web/src/common/services/global/storage.ts
+    modules/web/src/error/handler.ts
+    modules/web/src/login/component.ts
+    modules/web/src/login/template.html
+    modules/web/src/typings/root.ui.ts
+    modules/web/src/index.config.ts
+    modules/web/src/index.html
+    modules/web/pkg/args/args.go
+    modules/web/pkg/csrftoken/handler.go
+    modules/web/pkg/me/handler.go
+    modules/web/pkg/me/me.go
+    modules/web/pkg/router/setup.go
+    modules/web/pkg/satoken/handler.go
+    modules/web/pkg/utils/http.go
+    modules/web/pkg/utils/log.go
+    modules/web/pkg/utils/middleware.go
+    modules/web/pkg/utils/sso.go
+    modules/web/go.mod
+    modules/web/go.sum
+    modules/web/main.go
+    Dockerfile
+    build.sh
+
+####   kubernetes
+1. Shipped with K8s binaries and images based on K8s v1.29 which is derived from https://github.com/kubernetes/kubernetes
+Modified Files:
+    go.mod
+    go.sum
+
+####   metrics-server
+1. Shipped with K8s binaries and images based on kubernetes metrics-server 0.7.0 which is derived from https://github.com/kubernetes-sigs/metrics-server
+Modified Files:
+    go.mod
+    go.sum
+
+####   opensaml
+1. Shipped with image itom-idm which is derived from (https://git.shibboleth.net/view/?p=java-opensaml.git;a=summary)
+  Modified Files:
+opensaml-parent/pom.xml
+opensaml-core/pom.xml
+opensaml-messaging-api/pom.xml
+opensaml-messaging-impl/pom.xml
+opensaml-profile-api/pom.xml
+opensaml-profile-impl/pom.xml
+opensaml-saml-api/pom.xml
+opensaml-security-impl/pom.xml
+opensaml-soap-api/pom.xml
+opensaml-soap-impl/pom.xml
+opensaml-storage-api/pom.xml
+opensaml-storage-impl/pom.xml
+opensaml-xacml-api/pom.xml
+opensaml-xacml-impl/pom.xml
+opensaml-xacml-saml-api/pom.xml
+opensaml-xacml-saml-impl/pom.xml
+opensaml-xmlsec-api/pom.xml
+opensaml-xmlsec-impl/pom.xml
+opensaml-xmlsec-impl/org/opensaml/xmlsec/derivation/impl/ConcatKDF.java
+opensaml-xmlsec-impl/org/opensaml/xmlsec/signature/support/tests/DetachedSignatureTest.java
+opensaml-saml-impl/pom.xml
+opensaml-saml-impl/org/opensaml/saml/metadata/resolver/filter/impl/EntityRoleFilterTest.java
+opensaml-saml-impl/org/opensaml/saml/metadata/resolver/impl/AbstractDynamicHTTPMetadataResolverTest.java
+opensaml-saml-impl/org/opensaml/saml/metadata/resolver/impl/FileBackedHTTPMetadataResolverTest.java
+opensaml-saml-impl/org/opensaml/saml/metadata/resolver/impl/FunctionDrivenDynamicHTTPMetadataResolverTest.java
+opensaml-saml-impl/org/opensaml/saml/metadata/resolver/impl/HTTPMetadataResolverTest.java
+opensaml-security-api/pom.xml
+opensaml-security-api/org/opensaml/security/crypto/KeySupport.java
+opensaml-security-api/org/opensaml/security/crypto/ec/ECSupport.java
+opensaml-security-api/org/opensaml/security/crypto/dh/BaseDHTest.java
+opensaml-security-api/org/opensaml/security/httpclient/SecurityEnhancedHTTPResourceTest.java
+opensaml-security-api/org/opensaml/security/testing/SecurityProviderTestSupport.java
+opensaml-security-api/org/bouncycastle/identity/asn1/cryptlib/CryptlibObjectIdentifiers.java
+opensaml-security-api/org/bouncycastle/identity/crypto/CipherParameters.java
+opensaml-security-api/org/bouncycastle/identity/crypto/CryptoServiceProperties.java
+opensaml-security-api/org/bouncycastle/identity/crypto/CryptoServicePurpose.java
+opensaml-security-api/org/bouncycastle/identity/crypto/DataLengthException.java
+opensaml-security-api/org/bouncycastle/identity/crypto/DerivationFunction.java
+opensaml-security-api/org/bouncycastle/identity/crypto/DerivationParameters.java
+opensaml-security-api/org/bouncycastle/identity/crypto/Digest.java
+opensaml-security-api/org/bouncycastle/identity/crypto/ExtendedDigest.java
+opensaml-security-api/org/bouncycastle/identity/crypto/OutputLengthException.java
+opensaml-security-api/org/bouncycastle/identity/crypto/RuntimeCryptoException.java
+opensaml-security-api/org/bouncycastle/identity/crypto/agreement/kdf/ConcatenationKDFGenerator.java
+opensaml-security-api/org/bouncycastle/identity/crypto/digests/EncodableDigest.java
+opensaml-security-api/org/bouncycastle/identity/crypto/digests/GeneralDigest.java
+opensaml-security-api/org/bouncycastle/identity/crypto/digests/LongDigest.java
+opensaml-security-api/org/bouncycastle/identity/crypto/digests/RIPEMD160Digest.java
+opensaml-security-api/org/bouncycastle/identity/crypto/digests/SHA1Digest.java
+opensaml-security-api/org/bouncycastle/identity/crypto/digests/SHA224Digest.java
+opensaml-security-api/org/bouncycastle/identity/crypto/digests/SHA256Digest.java
+opensaml-security-api/org/bouncycastle/identity/crypto/digests/SHA384Digest.java
+opensaml-security-api/org/bouncycastle/identity/crypto/digests/SHA512Digest.java
+opensaml-security-api/org/bouncycastle/identity/crypto/digests/Utils.java
+opensaml-security-api/org/bouncycastle/identity/crypto/ec/CustomNamedCurves.java
+opensaml-security-api/org/bouncycastle/identity/crypto/params/ECDomainParameters.java
+opensaml-security-api/org/bouncycastle/identity/crypto/params/KDFParameters.java
+opensaml-security-api/org/bouncycastle/identity/jcajce/provider/asymmetric/util/EC5Util.java
+opensaml-security-api/org/bouncycastle/identity/math/ec/custom/djb/Curve25519.java
+opensaml-security-api/org/bouncycastle/identity/math/ec/custom/djb/Curve25519Field.java
+opensaml-security-api/org/bouncycastle/identity/math/ec/custom/djb/Curve25519FieldElement.java
+opensaml-security-api/org/bouncycastle/identity/math/ec/custom/djb/Curve25519Point.java
+opensaml-security-api/org/bouncycastle/jce/ECNamedCurveTable.java
+opensaml-security-api/org/bouncycastle/jce/spec/ECNamedCurveParameterSpec.java
+opensaml-security-api/org/bouncycastle/jce/spec/ECParameterSpec.java
+
+####   prometheus-alertmanager
+1. Shipped with alertmanager binaries which is derived from https://github.com/prometheus/alertmanager
+Modified Files:
+    go.mod
+    go.sum
+
+####   prometheus-node_exporter
+1. Shipped with node_exporter binaries which is derived from  https://github.com/prometheus/node_exporter
+Modified Files:
+    go.mod
+    go.sum
+
+####   prometheus-operator
+1. Shipped with prometheus-operator binaries which is derived from https://github.com/prometheus-operator/prometheus-operator
+Modified Files:
+    go.mod
+    go.sum
+
+####   prometheus-thanos
+1. Shipped with thanos binaries which is derived from https://github.com/thanos-io/thanos
+Modified Files:
+    go.mod
+    go.sum
+
+####   prometheus
+1. Shipped with prometheus binaries which is derived from https://github.com/prometheus/prometheus
+Modified Files:
+    go.mod
+    go.sum
+
+####   sig-storage-local-static-provisioner
+1. Shipped with local-provisioner binary, image and chart based on sig-storage-local-static-provisioner v2.7.0 which is derived from https://github.com/kubernetes-sigs/sig-storage-local-static-provisioner
+Modified Files:
+    cmd/local-volume-provisioner/main.go
+
+####   snakeyaml
+1. Shipped with snakeyaml-2.0-mf.<build> derived from snakeyaml-2.0 (https://bitbucket.org/snakeyaml/snakeyaml)
+  Modified Files:
+   src/main/java/org/yaml/snakeyaml/representer/Representer.java
+   protected Map<Class<? extends Object>, TypeDescription> typeDefinitions = Collections.emptyMap();
++
++  public Representer() {
++    this(new DumperOptions());
++  }
+
+
+
+
+####   vault
+1. Shipped with image vault:0.27.0. which is derived from (https://github.com/hashicorp/vault.git)
+  Modified Files:
+     vault/audit_broker.go
+     helper/metricsutil/metricsutil.go
+     internalshared/configutil/listener.go
+     scripts/build.sh
+     go.mod
+     go.sum
+
+####   velero
+1. Shipped with image itom-velero:1.7.x which is derived from (https://github.com/vmware-tanzu/velero; https://github.com/vmware-tanzu/velero-plugin-for-aws; https://github.com/vmware-tanzu/velero-plugin-for-gcp; https://github.com/vmware-tanzu/velero-plugin-for-microsoft-azure)
+  Modified Files:
+     go.mod
+     go.sum
+
+####   yq
+
+1. Shipped with binary yq 4.29 which is derived from (https://github.com/mikefarah/yq)
+  Modified Files:
+     go.mod
+     go.sum
+
