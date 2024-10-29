@@ -1,0 +1,974 @@
+#!/bin/bash
+
+# Copyright 2017 - 2024 Open Text.
+#
+# The only warranties for products and services of Open Text and its affiliates and licensors ("Open Text")
+# are as may be set forth in the express warranty statements accompanying such products and services.
+# Nothing herein should be construed as constituting an additional warranty. Open Text shall not be liable
+# for technical or editorial errors or omissions contained herein. The information contained herein is subject
+# to change without notice.
+#
+# Except as specifically indicated otherwise, this document contains confidential information and a valid
+# license is required for possession, use or copying. If this work is provided to the U.S. Government,
+# consistent with FAR 12.211 and 12.212, Commercial Computer Software, Computer Software
+# Documentation, and Technical Data for Commercial Items are licensed to the U.S. Government under
+# vendor's standard commercial license.
+
+#see feature: OCTFT19S1761772
+if [[ "bash" != "$(readlink /proc/$$/exe|xargs basename)" ]];then
+    echo "Error: only bash support, current shell: $(readlink /proc/$$/exe)"
+    exit 1
+fi
+set +o posix
+
+#set default registry to docker hub
+CURRENT_DIR=$(cd `dirname $0`;pwd)
+if [[ -f "/etc/profile.d/itom-cdf.sh" ]]; then
+    source /etc/profile.d/itom-cdf.sh
+fi
+if [[ -f "$HOME/itom-cdf.sh" ]]; then
+    source $HOME/itom-cdf.sh
+fi
+if [[ -f "${CDF_HOME}/properties/images/images.properties" ]]; then
+    source ${CDF_HOME}/properties/images/images.properties
+fi
+if [[ -f "${CDF_HOME}/properties/images/charts.properties" ]]; then
+    source ${CDF_HOME}/properties/images/charts.properties
+fi
+if [[ -z "${TMP_FOLDER}" ]]; then
+    TMP_FOLDER=/tmp
+fi
+SCRIPT_TMP=${TMP_FOLDER}/updateExternalDbInfo_bak
+mkdir -p ${SCRIPT_TMP}
+WARRNING_FLAG=0
+ORG_ARGS="$@"
+COMPONENT=
+SSL=false
+TESTCONN=true
+RELEASE_NAME=cdf
+SLEEP_TIME=3
+RETRY_TIMES=30
+CREATE_DATABASE=false
+COMPONENTNAME=$(basename $0|cut -d'.' -f1)
+LOGFILENAME=$COMPONENTNAME.`date "+%Y%m%d%H%M%S"`.log
+if [[ ! -z "${CDF_HOME}" ]]; then
+    LOG_FOLDER=${CDF_HOME}/log/updateExternalDbInfo
+else
+    LOG_FOLDER=/tmp/updateExternalDbInfo
+fi
+LOG_FILE=${LOG_FOLDER}/${LOGFILENAME}
+if [[ ! -d "${LOG_FOLDER}" ]]; then
+    mkdir -p ${LOG_FOLDER}
+fi
+
+CURRENT_PID=$$
+spin(){
+    local lost=
+    local spinner="\\|/-"
+    trap 'lost=true' SIGTERM
+    while :
+    do
+        if [[ -n "$lost" ]] ; then
+            break
+        fi
+        for i in $(seq 0 3)
+        do
+            ps -p $CURRENT_PID > /dev/null 2>&1
+            if [[ $? -ne 0 ]] ; then
+                lost=true
+                break
+            fi
+            echo -n "${spinner:$i:1}"
+            echo -en "\010"
+            ps -p $CURRENT_PID > /dev/null 2>&1
+            if [[ $? -ne 0 ]] ; then
+                lost=true
+                break
+            fi
+            sleep 0.2
+        done
+    done
+    echo " "
+}
+
+startLoading(){
+    stopLoading
+    spin &
+    CDF_LOADING_LAST_PID=$!
+}
+
+stopLoading(){
+    if [[ -n "$CDF_LOADING_LAST_PID" ]];then
+        ps -p $CDF_LOADING_LAST_PID > /dev/null 2>&1
+        if [[ $? == 0 ]] ; then
+            kill -s SIGTERM $CDF_LOADING_LAST_PID >/dev/null 2>&1
+            wait $CDF_LOADING_LAST_PID >/dev/null 2>&1
+        fi
+        CDF_LOADING_LAST_PID=
+    fi
+}
+
+getRfcTime(){
+    local fmt=$1
+    date --rfc-3339=${fmt}|sed 's/ /T/'
+}
+
+write_log() {
+    local level=$1
+    local msg=$2
+    local status=$3
+    local consoleTimeFmt=$(getRfcTime 'seconds')
+    local logTimeFmt=$(getRfcTime 'ns')
+    if [[ -n "$CDF_LOADING_LAST_PID" ]] && [[ "$level" =~ ^(info|warn|error|loading|fatal)$ ]];then
+        stopLoading
+    fi
+    case $level in
+        debug)
+            if [ -n "$LOG_FILE" ]; then
+                echo -e "$logTimeFmt DEBUG $msg" >>$LOG_FILE
+            else
+                echo -e "$logTimeFmt DEBUG $msg"
+            fi
+            ;;
+        info|warn|error)
+            if [ -n "$LOG_FILE" ]; then
+                echo -e "$msg" && echo -e "$logTimeFmt `echo $level|tr [:lower:] [:upper:]`  $msg" >>$LOG_FILE
+            else
+                echo -e "$msg"
+            fi
+            ;;
+        loading)
+            if [ -n "$LOG_FILE" ]; then
+                echo -en "$msg " && echo -e "$logTimeFmt `echo $level|tr [:lower:] [:upper:]`  $msg" >>$LOG_FILE
+            else
+                echo -en "$msg"
+            fi
+            startLoading
+            ;;
+        fatal)
+            if [ -n "$LOG_FILE" ]; then
+                echo -e "$msg" && echo -e "$logTimeFmt FATAL $msg" >>$LOG_FILE
+            else
+                echo -e "$msg"
+            fi
+            if [[ -d "${SCRIPT_TMP}" ]]; then
+                rm -rf ${SCRIPT_TMP}
+            fi
+            exit 1 ;;
+        *)
+            if [ -n "$LOG_FILE" ]; then
+                echo -e "$msg" && echo -e "$logTimeFmt INFO  $msg" >>$LOG_FILE
+            else
+                echo -e "$msg"
+            fi
+            ;;
+    esac
+}
+
+exec_cmd(){
+    local MASK_REG_EXP="(?i)(sessionId|token|password|tls\.key|tls\.cert|Key|\.dockerconfigjson)(\"?\s*[:=]\s*)[^',}\s]*"
+    ${CDF_HOME}/bin/cmd_wrapper -c "$1" -f $LOG_FILE -x=DEBUG -ms -mre $MASK_REG_EXP $2 $3 $4 $5
+    return $?
+}
+
+usage(){
+    local name=$1
+    echo "Usage: ${name} <-u|--user <username>> <-H|--host <DB host>> <-p|--port <DB port>> <-d|--dbname <DB name>> --component itom-idm"
+    echo "    or ${name} <-u|--user <username>> <-U|--url <DB connection URL>> --component <itom-cdf-api/itom-idm>"
+    echo "          --component              Specify the service name the database is serving for. Allowable values are: itom-cdf-api/itom-idm. Required."
+    echo "       -u|--user                   External database username. Supported for component both \"itom-idm\" and \"itom-cdf-api\"."
+    echo "       -H|--host                   External database host. Only supported for component \"itom-idm\""
+    echo "       -p|--port                   External database port. Only supported for component \"itom-idm\""
+    echo "       -d|--dbname                 External database name. Only supported for component \"itom-idm\""
+    echo "       -U|--url                    External database connection URL. Supported for component both \"itom-idm\" and \"itom-cdf-api\"."
+    echo "          --cacert FILE            External database ca certificate. If this value not null, means you want to connect database with TLS enabled."
+    echo "       -c|--testconnection         Test connection to target db. Optional values are (\"true\",\"false\"), default true."
+    echo "       -y|--yes                    Answer yes for any confirmations."
+    echo "          --dbschema               External database schema. If you choose \"-y|--yes\" and you are using Oracle database, please input this parameter"
+    echo "          --dbpassword             External database password. If you choose \"-y|--yes\", please input this parameter, warp the password in single quote."
+    echo "          --tlsskiphostnameverify  TLS connection skip verify host name. Only Supported when TLS is enabled and database type is postgresql. Optional values are (\"true\",\"false\")."
+    echo "          --wait                   If set, will wait until all related K8S objects(pod, deployment, StatefulSet, service etc) are in a ready state before exit."
+    echo "       -h|--help                   Show help."
+    if [[ -d "${SCRIPT_TMP}" ]]; then
+        rm -rf ${SCRIPT_TMP}
+    fi
+    exit 1
+}
+
+if [[ -z $1 ]] ; then
+    usage $0
+fi
+
+while [[ ! -z $1 ]] ; do
+    case "$1" in
+#        -I|--instance)
+#        case "$2" in
+#            -*) echo "-I|--instance parameter requires a value. " ; exit 1 ;;
+#            *)  if [[ -z $2 ]] ; then echo "-I|--instance parameter requires a value. " ; exit 1 ; fi ; INSTANCE_NAME=$(echo $2 | tr '[A-Z]' '[a-z]') ; UPPER_INSTANCE_NAME=$(echo ${instanceName} | tr '[a-z]' '[A-Z]') ; shift 2 ;;
+#        esac ;;
+        -u|--user)
+        case "$2" in
+            -*) echo "-u|--user parameter requires a value. " ; exit 1 ;;
+            *)  if [[ -z $2 ]] ; then echo "-u|--user parameter requires a value. " ; exit 1 ; fi ; DB_USERNAME=$2 ; shift 2 ;;
+        esac ;;
+        -y|--yes) answer="Y" ; shift ;;
+        --wait) WAIT="true" ; shift ;;
+        --dbschema)
+        case "$2" in
+            -*) echo "--dbschema parameter requires a value. " ; exit 1 ;;
+            *)  if [[ -z $2 ]] ; then echo "--dbschema parameter requires a value. " ; exit 1 ; fi ; dbschema=$2 ; shift 2 ;;
+        esac ;;
+        --dbpassword)
+        case "$2" in
+            -*) echo "--dbpassword parameter requires a value. " ; exit 1 ;;
+            *)  if [[ -z $2 ]] ; then echo "--dbpassword parameter requires a value. " ; exit 1 ; fi ; dbpassword=$2 ; shift 2 ;;
+        esac ;;
+        -H|--host)
+        case "$2" in
+            -*) echo "-H|--host parameter requires a value. " ; exit 1 ;;
+            *)  if [[ -z $2 ]] ; then echo "-H|--host parameter requires a value. " ; exit 1 ; fi ; DB_HOST=$2 ; shift 2 ;;
+        esac ;;
+        -p|--port)
+        case "$2" in
+            -*) echo "-p|--port parameter requires a value. " ; exit 1 ;;
+            *)  if [[ -z $2 ]] ; then echo "-p|--port parameter requires a value. " ; exit 1 ; fi ; DB_PORT=$2 ; shift 2 ;;
+        esac ;;
+        -d|--dbname)
+        case "$2" in
+            -*) echo "-d|--dbname parameter requires a value. " ; exit 1 ;;
+            *)  if [[ -z $2 ]] ; then echo "-d|--dbname parameter requires a value. " ; exit 1 ; fi ; DB_NAME=$2 ; shift 2 ;;
+        esac ;;
+        -U|--url)
+        case "$2" in
+            -*) echo "-U|--url parameter requires a value. " ; exit 1 ;;
+            *)  if [[ -z $2 ]] ; then echo "-U|--url parameter requires a value. " ; exit 1 ; fi ; DB_CONNECTION_URL=${2// /} ; shift 2 ;;
+        esac ;;
+        -c|--testconnection)
+        case "$2" in
+            -*) echo "-c|--testconnection parameter requires a value. " ; exit 1 ;;
+            *)  if [[ -z $2 ]] ; then echo "-c|--testconnection parameter requires a value. " ; exit 1 ; fi ; TESTCONN=$2 ; shift 2 ;;
+        esac ;;
+        --cacert)
+        case "$2" in
+            -*) echo "--cacert parameter requires a value. " ; exit 1 ;;
+            *)  if [[ -z $2 ]] ; then echo "--cacert parameter requires a value. " ; exit 1 ; fi ; CACERT_FILE=$2 ; shift 2 ;;
+        esac ;;
+        --component)
+        case "$2" in
+            -*) echo "--component parameter requires a value. " ; exit 1 ;;
+            *)  if [[ -z $2 ]] ; then echo "--component parameter requires a value. " ; exit 1 ; fi ; COMPONENT=$2 ; if [ "$COMPONENT" != "itom-cdf-api" -a "$COMPONENT" != "itom-idm" ];then echo "Allowable values for --component are: itom-cdf-api/itom-idm"; exit 1 ; fi ; shift 2 ;;
+        esac ;;
+        --tlsskiphostnameverify)
+        case "$2" in
+            -*) echo "---tlsskiphostnameverify parameter requires a value. " ; exit 1 ;;
+            *)  if [[ -z $2 ]] ; then echo "--tlsskiphostnameverify parameter requires a value. " ; exit 1 ; fi ; DB_TLS_SKIP_HOSTNAME_VERIFICATION=$2 ; if [ "$DB_TLS_SKIP_HOSTNAME_VERIFICATION" != "true" -a "$DB_TLS_SKIP_HOSTNAME_VERIFICATION" != "false" ];then echo "Allowable values for --tlsskiphostnameverify are: true/false"; exit 1 ; fi ; shift 2 ;;
+        esac ;;
+        --writevault) WRITE_VAULT="true" ; shift ;;
+        --runinpod) RUN_IN_POD="true" ; shift ;;
+        *|-*|-h|--help|/?|help) usage $0 ;;
+#        *) shift ; break ;;
+    esac
+done
+
+getRtToken(){
+    if [[ -z "${VAULT_TOKEN}" ]] ; then
+        #ENCRYPTED_ROOT_TOKEN=$(${KUBECTL_PATH} get secret vault-credential -n ${CDF_NAMESPACE} -o json 2>/dev/null | ${JQ_PATH} -r '.data."root.token"')
+        PASSPHRASE=$(${KUBECTL_PATH} get secret vault-passphrase -n ${CDF_NAMESPACE} -o json 2>/dev/null | ${JQ_PATH} -r '.data.passphrase')
+        VAULT_CREDENTIAL_SECRET=$(${KUBECTL_PATH} get secret vault-credential -n ${CDF_NAMESPACE} -o json 2>/dev/null )
+        ENCRYPTED_ROOT_TOKEN=$(echo ${VAULT_CREDENTIAL_SECRET} | ${JQ_PATH} -r '.data."root.token"')
+        ROOT_TOKEN_ENC_IV=$(echo ${VAULT_CREDENTIAL_SECRET} | ${JQ_PATH} -r '.data."root.token.enc_iv"'| base64 -d)
+        ROOT_TOKEN_ENC_KEY=$(echo ${VAULT_CREDENTIAL_SECRET} | ${JQ_PATH} -r '.data."root.token.enc_key"'| base64 -d)
+        export VAULT_TOKEN=$(echo ${ENCRYPTED_ROOT_TOKEN} | openssl aes-256-cbc -md sha256 -a -d -pass pass:"${PASSPHRASE}" -K ${ROOT_TOKEN_ENC_KEY} -iv ${ROOT_TOKEN_ENC_IV})
+    fi
+    if [[ -z "${VAULT_TOKEN}" ]] ; then
+        write_log "fatal" "Failed to get the Vault root token."
+    fi
+}
+
+preCheck() {
+    if [[ -z "${COMPONENT}" ]]; then
+        echo "The parameter --component is required."
+        echo ""
+        usage
+    elif [[ "${COMPONENT}" != "itom-idm" ]] && [[ "${COMPONENT}" != "itom-cdf-api" ]];then
+        echo "The parameter --component only support value in \"itom-cdf-api/itom-idm\"."
+        echo ""
+        usage
+    fi
+    if [[ "$COMPONENT" == "itom-cdf-api" ]];then
+        DB_TYPE=$(getValues ${HELM_VALUE_FILE} '.cdfapiserver.deployment.database.type')
+        if [[ -z "${DB_TYPE}" ]] || [[ "${DB_TYPE}" == "null" ]]; then
+            DB_TYPE=$(getValues ${HELM_VALUE_FILE} '.global.database.type')
+            if [[ -z "${DB_TYPE}" ]] || [[ "${DB_TYPE}" == "null" ]]; then
+                DB_TYPE=postgresql
+            fi
+        fi
+        SUITE_DEPLOYMENT_MANAGEMENT=$(getValues ${HELM_VALUE_FILE_FULL} '.global.services.suiteDeploymentManagement')
+        if [[ "${SUITE_DEPLOYMENT_MANAGEMENT}" != "true" ]]; then
+            write_log "info" "The ${COMPONENT} database is not enabled, no need to update."
+            if [[ -d "${SCRIPT_TMP}" ]]; then
+                rm -rf ${SCRIPT_TMP}
+            fi
+            exit 0
+        fi
+        SERVICE_ACCOUNT="cdfapiserver-cdf-api-da"
+    else
+        DB_TYPE=$(getValues ${HELM_VALUE_FILE} '.idm.deployment.database.type')
+        if [[ -z "${DB_TYPE}" ]] || [[ "${DB_TYPE}" == "null" ]]; then
+            DB_TYPE=$(getValues ${HELM_VALUE_FILE} '.global.database.type')
+            if [[ -z "${DB_TYPE}" ]] || [[ "${DB_TYPE}" == "null" ]]; then
+                DB_TYPE=postgresql
+            fi
+        fi
+        SERVICE_ACCOUNT="itom-idm"
+    fi
+    if [[ ! -z ${CACERT_FILE}  ]] ; then
+        SSL=true
+        CACRT_CONTENT=$(cat ${CACERT_FILE} 2>/dev/null)
+        CACRT_BASE64_CONTENT=$(cat ${CACERT_FILE} 2>/dev/null|base64 -w0)
+    fi
+    if [[ "${COMPONENT}" == "itom-cdf-api" ]];then
+        tlsEnabled=$(getValues ${HELM_VALUE_FILE} '.cdfapiserver.deployment.database.tlsEnabled')
+    elif [[ "${COMPONENT}" == "itom-idm" ]]; then
+        tlsEnabled=$(getValues ${HELM_VALUE_FILE} '.global.database.tlsEnabled')
+    fi
+    if [[ "${SSL}" != "true" ]] && [[ "${answer}" != "Y" ]] && [[ "${tlsEnabled}" == "true" ]] && [[ "${RUN_IN_POD}" != "true" ]]; then
+        answerNonTls=""
+        write_log "info" "The ${COMPONENT} database commection of this deployment is set to TLS connection enabled."
+        write_log "info" "If you want to keep the database TLS connection enabled, add '--cacert <database cert file>' parameter when you run this command."
+        read -p "Are you sure to change the ${COMPONENT} database to TLS connection disabled? (Y/N): " answerNonTls
+        if [ "$answerNonTls" != "y" -a "$answerNonTls" != "yes" -a "$answerNonTls" != "Y" -a "$answerNonTls" != "YES" ];then write_log "fatal" "QUIT."; fi
+    fi
+    if [[ ! -z ${DB_TLS_SKIP_HOSTNAME_VERIFICATION} ]]; then
+        if [[ "${SSL}" != "true" ]]; then
+            write_log "warn" "The ${COMPONENT} database is not embedded TLS, parameter <--tlsskiphostnameverify> will be ignore."
+            DB_TLS_SKIP_HOSTNAME_VERIFICATION=""
+        fi
+        if [[ "${DB_TYPE}" != "postgresql" ]]; then
+            write_log "warn" "The ${COMPONENT} database type is not porsgresql, parameter <--tlsskiphostnameverify> will be ignore."
+            DB_TLS_SKIP_HOSTNAME_VERIFICATION=""
+        fi
+    fi
+    if [[ ! -z ${DB_CONNECTION_URL}  ]] ; then
+        DB_HOST=""
+        DB_PORT=""
+        DB_NAME=""
+    fi
+    if [[ ! -z ${answer}  ]] ; then
+        if [[ "${DB_TYPE}" == "oracle" ]] ; then
+            if [[ -z ${dbschema}  ]] ; then
+                write_log "fatal" "--dbschema parameter requires a value. "
+            fi
+        fi
+        if [[ -z ${dbpassword}  ]] ; then
+            write_log "fatal" "--dbpassword parameter requires a value. "
+        fi
+    fi
+    if [[ "${COMPONENT}" == "itom-idm" ]];then
+        #if DB_TYPE not postgresql, the CREATE_DATABASE will be false
+        if [[ "${DB_TYPE}" == "postgresql" ]] ; then
+            CREATE_DATABASE=$(getValues ${HELM_VALUE_FILE_FULL} '.global.database.createDb')
+        fi
+        export CREATE_DATABASE
+    fi
+    CLUSTER_MANAGEMENT=$(getValues ${HELM_VALUE_FILE_FULL} '.global.services.clusterManagement')
+    DEPLOYMENT_MANAGEMENT=$(getValues ${HELM_VALUE_FILE_FULL} '.global.services.deploymentManagement')
+    if ([[ -z "${CLUSTER_MANAGEMENT}" ]] || [[ "${CLUSTER_MANAGEMENT}" == "null" ]] || [[ "${CLUSTER_MANAGEMENT}" == "false" ]]) && ([[ -z "${DEPLOYMENT_MANAGEMENT}" ]] || [[ "${DEPLOYMENT_MANAGEMENT}" == "null" ]] || [[ "${DEPLOYMENT_MANAGEMENT}" == "false" ]]); then
+        write_log "fatal" "Component ${COMPONENT} not installed, no need to update database configuration."
+    fi
+    if [[ "${COMPONENT}" == "itom-idm" ]]; then
+        EMBEDDED_DB=$(getValues ${HELM_VALUE_FILE_FULL} '.global.database.internal')
+    elif [[ "${COMPONENT}" == "itom-cdf-api" ]]; then
+        EMBEDDED_DB=$(getValues ${HELM_VALUE_FILE_FULL} '.cdfapiserver.deployment.database.internal')
+    fi
+    if [[ "$EMBEDDED_DB" = "true" ]] && [[ "${RUN_IN_POD}" != "true" ]] && [[ "${answer}" != "Y" ]]; then
+        answerEmbedded=""
+        write_log "info" "The ${COMPONENT} database of this deployment is embedded."
+        read -p "Are you sure to change the ${COMPONENT} database to an external database? (Y/N): " answerEmbedded
+        if [ "$answerEmbedded" != "y" -a "$answerEmbedded" != "yes" -a "$answerEmbedded" != "Y" -a "$answerEmbedded" != "YES" ];then write_log "fatal" "QUIT."; fi
+        export EMBEDDED_DB=false
+    fi
+    if [[ -z "${SYSTEM_USER_ID}" ]] || [[ -z "${SYSTEM_GROUP_ID}" ]]; then
+        SYSTEM_USER_ID=$(getValues ${HELM_VALUE_FILE_FULL} '.global.securityContext.user')
+        SYSTEM_GROUP_ID=$(getValues ${HELM_VALUE_FILE_FULL} '.global.securityContext.fsGroup')
+    fi
+    write_log "info" "Start update database configuration ..."
+}
+
+readExternalDbInfo() {
+    local instanceName=$1
+    if [[ ${answer} == "Y" ]];then
+        if [[ "${DB_TYPE}" == "oracle" ]] ; then
+            DB_SCHEMA=${dbschema}
+        fi
+        DB_PASSWORD=${dbpassword}
+    else
+        if [[ "${DB_TYPE}" == "oracle" ]] ; then
+            if [[ -z ${dbschema}  ]] ; then
+                echo
+                read -p "External ${instanceName} DB Schema:" DB_SCHEMA
+            else
+                DB_SCHEMA=${dbschema}
+            fi
+        fi
+        if [[ -z ${dbpassword}  ]] ; then
+            old=$(stty -g)
+            stty -echo
+            echo
+            read -p "${instanceName} DB Password:" DB_PASSWORD
+            stty $old
+            echo ""
+        else
+            DB_PASSWORD=${dbpassword}
+        fi
+    fi
+}
+
+checkToolImage(){
+    if [[ -z "${IMAGE_ITOM_TOOLS_BASE}" ]]; then
+        IMAGE_ITOM_TOOLS_BASE=$(${KUBECTL_PATH} get cm images-configmap -n ${CDF_NAMESPACE} -o json 2>/dev/null|${JQ_PATH} -r '.data.IMAGE_ITOM_TOOLS_BASE')
+    fi
+    local orgName=$(getValues ${HELM_VALUE_FILE_FULL} '.global.docker.orgName')
+    local registryUrl=$(getValues ${HELM_VALUE_FILE_FULL} '.global.docker.registry')
+    if [[ ! -z "${IMAGE_ITOM_TOOLS_BASE}" ]] ; then
+        CHECK_TOOL_IMAGE="${registryUrl}/${orgName}/${IMAGE_ITOM_TOOLS_BASE}"
+    else
+        write_log "fatal" "Failed to get image name for checking database connection."
+    fi
+}
+
+testDbConnection(){
+    local job_name=$1
+    local tmp_secret=$2
+    local image_name="${CHECK_TOOL_IMAGE}"
+    local tmp_file="${TMP_FOLDER}/.test_db_connection.tmp"
+    > ${tmp_file}
+    #delete the pod in case of rerun
+    if [ $(kubectl get pod ${job_name} -n ${CDF_NAMESPACE} >/dev/null 2>&1; echo $?) -eq 0 ] ; then
+        kubectl delete pod ${job_name} -n ${CDF_NAMESPACE} --force >/dev/null 2>&1
+    fi
+    echo "
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${job_name}
+  namespace: ${CDF_NAMESPACE}
+spec:
+  containers:
+  - name: ${job_name}
+    image: ${image_name}
+    command: ['/base_apiserver/scripts/dbCheck.sh']
+    #command: ['bash', '-c', 'sleep 3600;']
+    envFrom:
+      - secretRef:
+          name: ${tmp_secret}
+    securityContext:
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+        - ALL
+      allowPrivilegeEscalation: false
+    volumeMounts:
+    - mountPath: /mnt
+      name: mnt
+    - mountPath: /tmp
+      name: tmp
+  imagePullSecrets:
+    - name: registrypullsecret
+  securityContext:
+    runAsUser: ${SYSTEM_USER_ID}
+    runAsGroup: ${SYSTEM_GROUP_ID}
+    fsGroup: ${SYSTEM_GROUP_ID}
+    supplementalGroups: [${SYSTEM_GROUP_ID}]
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  restartPolicy: Never
+  volumes:
+  - name: mnt
+    emptyDir: {}
+  - name: tmp
+    emptyDir: {}
+" | kubectl create -f - 1>${tmp_file} 2>>${tmp_file}
+    local reTryTimes=0
+    local pod_status
+    while (( $reTryTimes <  $RETRY_TIMES )); do
+        reTryTimes=$(( $reTryTimes + 1 ))
+        sleep 5
+        pod_status=$(kubectl get pods $job_name -n ${CDF_NAMESPACE} --no-headers 2>/dev/null|awk '{print $3}')
+        if [[ "$pod_status" == "Completed" ]] || [[ "$pod_status" == "Error" ]];then
+            break
+        fi
+    done
+    if [[ $reTryTimes -ge $RETRY_TIMES ]];then
+        pod_status="Timeout"
+    fi
+    CHECKDB_LOG=$(${KUBECTL_PATH} logs $job_name -n ${CDF_NAMESPACE})
+    CHECKDB_STATUS=${pod_status}
+    export CHECKDB_STATUS
+    export CHECKDB_LOG
+    if [[ "${pod_status}" == "Completed" ]]; then
+        write_log "info" "DB connection checked OK"
+        kubectl delete pod ${job_name} -n ${CDF_NAMESPACE} >/dev/null 2>&1
+        rm -f ${tmp_file}
+        return 0
+    elif [[ "${pod_status}" == "Error" ]]; then
+        kubectl delete pod ${job_name} -n ${CDF_NAMESPACE} >/dev/null 2>&1
+        rm -f ${tmp_file}
+        return 1
+    else
+        kubectl delete pod ${job_name} -n ${CDF_NAMESPACE} >/dev/null 2>&1
+        rm -f ${tmp_file}
+        return 2
+    fi
+}
+
+externalDbCheck(){
+    local dbType=${DB_TYPE}
+    local dbUser=${DB_USERNAME}
+    local dbPassword=${DB_PASSWORD}
+    local dbUrl=${DB_CONNECTION_URL}
+    local dbSslEnable=${SSL}
+    local dbTestConn=$TESTCONN
+
+    local ENABLE_FIPS=false
+    local CERT_CMD=
+    ENABLE_FIPS=$(${KUBECTL_PATH} get cm cdf-cluster-host -n ${CDF_NAMESPACE} -o custom-columns=:.data.ENABLE_FIPS --no-headers 2>/dev/null)
+    checkToolImage
+    ####create db parameter secret
+    local reTryTimes=0
+    local job_name="cdf-${INSTANCE_NAME}-db-check"
+    local tmp_secret="tmp-${INSTANCE_NAME}-check-secret"
+    while true; do
+        kubectl delete secret ${tmp_secret} -n ${CDF_NAMESPACE} >/dev/null 2>&1
+        kubectl create secret generic ${tmp_secret} -n ${CDF_NAMESPACE} \
+            --from-literal=ENABLE_FIPS=${ENABLE_FIPS} \
+            --from-literal=TLS_MIN_VERSION=${TLS_MIN_VERSION} \
+            --from-literal=DB_SSL_ENABLE=${dbSslEnable} \
+            --from-literal=DB_TYPE=${dbType} \
+            --from-literal=DB_USER=${dbUser} \
+            --from-literal=DB_PASSWORD="${dbPassword}" \
+            --from-literal=DB_URL="${dbUrl}" \
+            --from-literal=DB_CERT="${CACRT_CONTENT}" \
+            --from-literal=DB_PASSWORD_FLAG="password" \
+            --from-literal=DB_TEST_CONNECTION=${dbTestConn} \
+            --from-literal=DB_TLS_SKIP_HOSTNAME_VERIFICATION=${DB_TLS_SKIP_HOSTNAME_VERIFICATION} \
+            --from-literal=DB_CHECK_EMPTY="false" >/dev/null 2>&1
+        if [ $? -eq 0 ];then
+            break
+        else
+            reTryTimes=$(( $reTryTimes + 1 ))
+            if [ $reTryTimes -eq $RETRY_TIMES ]; then
+                write_log "error" "Failed to create ${tmp_secret} while checking ${INSTANCE_NAME} database."
+                return 1
+            else
+                write_log "debug" "Failed to create ${tmp_secret} while checking ${INSTANCE_NAME} database. Wait for $SLEEP_TIME seconds and retry: $reTryTimes"
+            fi
+            sleep $SLEEP_TIME
+        fi
+    done
+    testDbConnection ${job_name} ${tmp_secret} 2>&1
+    if [[ $? -ne 0 ]]; then
+        if [[ "${CHECKDB_STATUS}" == "Timeout" ]]; then
+            write_log "error" "A timeout occurred while waiting for connecting the database ${dbName}."
+            kubectl delete secret ${tmp_secret} -n ${CDF_NAMESPACE} >/dev/null 2>&1
+            return 1
+        fi
+        if [[ "${CHECKDB_STATUS}" == "Error" ]]; then
+            if [[ "${dbSslEnable}" == "true" ]] && [[ "$(echo ${CHECKDB_LOG}|grep "Got minus one from a read call"|wc -l)" -gt 0 ]] && [[ "${dbType}" == "oracle" ]]; then
+                write_log "error" "This problem may be caused by a database connection URL format problem, please refer to the following format:"
+                echo ""
+                write_log "error" "jdbc:oracle:thin:@(DESCRIPTION=(ADDRESS=(PROTOCOL=tcps)(HOST=<database-host>)(PORT=<database-port>))(CONNECT_DATA=(SID=<database-sid>)))"
+                echo ""
+            fi
+            write_log "error" "$CHECKDB_LOG"
+            kubectl delete secret ${tmp_secret} -n ${CDF_NAMESPACE} >/dev/null 2>&1
+            return 1
+        fi
+    fi
+    kubectl delete secret ${tmp_secret} -n ${CDF_NAMESPACE} >/dev/null 2>&1
+}
+
+writeToolImage(){
+    if [[ -z "${IMAGE_ITOM_CDF_DEPLOYER}" ]]; then
+        IMAGE_ITOM_CDF_DEPLOYER=$(${KUBECTL_PATH} get cm images-configmap -n ${CDF_NAMESPACE} -o json 2>/dev/null|${JQ_PATH} -r '.data.IMAGE_ITOM_CDF_DEPLOYER')
+    fi
+    if [[ -z "${IMAGE_KUBERNETES_VAULT_INIT}" ]]; then
+        IMAGE_KUBERNETES_VAULT_INIT=$(${KUBECTL_PATH} get cm images-configmap -n ${CDF_NAMESPACE} -o json 2>/dev/null|${JQ_PATH} -r '.data.IMAGE_KUBERNETES_VAULT_INIT')
+    fi
+    local orgName=$(getValues ${HELM_VALUE_FILE_FULL} '.global.docker.orgName')
+    local registryUrl=$(getValues ${HELM_VALUE_FILE_FULL} '.global.docker.registry')
+    if [[ ! -z "${IMAGE_ITOM_CDF_DEPLOYER}" ]] && [[ ! -z "${IMAGE_KUBERNETES_VAULT_INIT}" ]]; then
+        WRITE_TOOL_IMAGE="${registryUrl}/${orgName}/${IMAGE_ITOM_CDF_DEPLOYER}"
+        INIT_IMAGE="${registryUrl}/${orgName}/${IMAGE_KUBERNETES_VAULT_INIT}"
+    else
+        write_log "fatal" "Failed to get image name for writing vault data."
+    fi
+}
+
+writeInVault(){
+    if [[ ! -z ${DB_PASSWORD} ]] ; then
+        str=$(echo ${DB_PASSWORD}|base64 -d)
+        getRtToken
+        export VAULT_ADDR=https://itom-vault.${CDF_NAMESPACE}:8200
+        export VAULT_CACERT=/var/run/secrets/boostport.com/ca.crt
+        export VAULT_CLIENT_CERT=/var/run/secrets/boostport.com/server.crt
+        export VAULT_CLIENT_KEY=/var/run/secrets/boostport.com/server.key
+        NAMESPACE=${CDF_NAMESPACE}
+        APPROLE=baseinfra
+        APPROLE_ID=`vault read -ca-cert=/var/run/secrets/boostport.com/ca.crt -field=role_id auth/approle/role/${NAMESPACE}-${APPROLE}/role-id 2>/dev/null`
+        if [[ $? -ne 0 ]]; then
+            write_log "fatal" "ERROR in getting role id of ROLE ${NAMESPACE}-${APPROLE}"
+        fi
+        vault write -ca-cert=/var/run/secrets/boostport.com/ca.crt -field=value itom/suite/${APPROLE_ID}/${DB_PASSWORD_KEY} value=$str > /dev/null 2>&1
+        if [[ $? != 0 ]]; then
+            write_log "fatal" "Failed to save password of ${UPPER_INSTANCE_NAME} DB to Vault."
+        fi
+    fi
+}
+
+runInPod() {
+    local seconds=0
+    local timeout_seconds=3
+    local pod_status
+    local ret
+    local option=$1
+    local hostname=$(hostname -i|awk '{print $1}')
+    local pod_name=cdf-${COMPONENT}-db-${option}
+    writeToolImage
+    while true; do
+        ret="initerrorcode"
+        ${KUBECTL_PATH} delete pods $pod_name -n ${CDF_NAMESPACE} 1>/dev/null 2>&1
+        echo "
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    app: $pod_name
+  name: $pod_name
+  namespace: ${CDF_NAMESPACE}
+  annotations:
+    pod.boostport.com/vault-approle: ${CDF_NAMESPACE}-baseinfra
+    pod.boostport.com/vault-init-container: install
+spec:
+  initContainers:
+  - name: install
+    image: ${INIT_IMAGE}
+    securityContext:
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+        - ALL
+      allowPrivilegeEscalation: false
+    volumeMounts:
+    - mountPath: /mnt
+      name: mnt
+    - mountPath: /tmp
+      name: tmp
+    env:
+    - name: CERT_COMMON_NAME
+      value: Common_Name:cdf-deployer
+    volumeMounts:
+    - name: vault-token
+      mountPath: /var/run/secrets/boostport.com
+  containers:
+  - name: writevault
+    image: ${WRITE_TOOL_IMAGE}
+    command: ['sh', '-c', '/bin/updateExternalDbInfo --runinpod --component ${COMPONENT} --${option}']
+    imagePullPolicy: IfNotPresent
+    env:
+    - name: CDF_NAMESPACE
+      value: \"${CDF_NAMESPACE}\"
+    - name: DB_PASSWORD_KEY
+      value: \"${DB_PASSWORD_KEY}\"
+    - name: DB_PASSWORD
+      value: \"$(echo "${DB_PASSWORD}"|base64)\"
+    securityContext:
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+        - ALL
+      allowPrivilegeEscalation: false
+    volumeMounts:
+    - name: vault-token
+      mountPath: /var/run/secrets/boostport.com
+    - name: tmp
+      mountPath: /tmp
+    - mountPath: /mnt
+      name: mnt
+  serviceAccount: ${SERVICE_ACCOUNT}
+  serviceAccountName: ${SERVICE_ACCOUNT}
+  securityContext:
+    runAsUser: ${SYSTEM_USER_ID}
+    runAsGroup: ${SYSTEM_GROUP_ID}
+    fsGroup: ${SYSTEM_GROUP_ID}
+    supplementalGroups: [${SYSTEM_GROUP_ID}]
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  imagePullSecrets:
+    - name: registrypullsecret
+  volumes:
+  - name: vault-token
+    emptyDir: {}
+  - name: tmp
+    emptyDir: {}
+  - name: mnt
+    emptyDir: {}
+  dnsPolicy: ClusterFirst
+  priority: 0
+  restartPolicy: Never
+        " | ${KUBECTL_PATH} create -f - 1>/dev/null 2>&1
+        local retry_count=12
+        while (( $retry_count > 0 )); do
+            retry_count=$(( $retry_count - 1 ))
+            sleep 5
+            pod_status=$(${KUBECTL_PATH} get pods $pod_name -n ${CDF_NAMESPACE} --no-headers|awk '{print $3}')
+            if [[ $pod_status == "Completed" ]];then
+                ret=0
+                break
+            elif [[ $pod_status == "Error" ]];then
+                break
+            fi
+        done
+        if [[ $ret == 0 ]] ; then
+            ${KUBECTL_PATH} delete pods $pod_name -n ${CDF_NAMESPACE} 1>/dev/null 2>&1
+            break
+        elif (( $seconds > ${timeout_seconds} )); then
+            write_log "error" "A timeout occurred while waiting for updating the ${dbName} connect configuration."
+            # ${KUBECTL_PATH} describe pods $pod_name -n ${CDF_NAMESPACE}
+            ${KUBECTL_PATH} logs $pod_name -n ${CDF_NAMESPACE} >> ${LOG_FILE}
+            ${KUBECTL_PATH} logs $pod_name -n ${CDF_NAMESPACE}
+            ${KUBECTL_PATH} delete pods $pod_name -n ${CDF_NAMESPACE} 1>/dev/null 2>&1
+            #${KUBECTL_PATH} delete pods $pod_name -n ${CDF_NAMESPACE} 1>/dev/null
+            write_log "fatal" "Failed to update external db information."
+        fi
+        ${KUBECTL_PATH} delete pods $pod_name -n ${CDF_NAMESPACE} 1>/dev/null 2>&1
+        seconds=$(( $seconds + 1 ))
+        sleep 1
+    done
+}
+
+updateValues() {
+    local inputFile=$1
+    local tmpFile="${SCRIPT_TMP}/${RELEASE_NAME}-${CDF_NAMESPACE}-values-tmp.yaml"
+    local key="$2"
+    local value="$3"
+    local fileName=$(basename ${inputFile})
+    if [[ "${value}" == "true" ]] || [[ "${value}" == "false" ]] || [[ "${value}" == "null" ]] ; then
+        ${YQ_PATH} eval ''${key}'|='${value}'' ${inputFile} 2>/dev/null > ${tmpFile}
+    else
+        ${YQ_PATH} eval ''${key}'|="'${value}'"' ${inputFile} 2>/dev/null > ${tmpFile}
+    fi
+    ###check if command return failed or old values count less than the count before update.
+    #if old values count less than the count before update, maybe command have some error or the yq command temp file create failed, in this case, we will retry.
+    if [[ $? -ne 0 ]] || [[ $(${YQ_PATH} eval ${tmpFile}|wc -l) -lt $(${YQ_PATH} eval ${inputFile}|wc -l) ]]; then
+        echo "Failed to update value of key: ${key}."
+        FAILED_KEY_COUNT=$((${FAILED_KEY_COUNT}+1))
+        rm -f ${tmpFile}
+        return 1
+    else
+        chmod 600 ${tmpFile}
+        /bin/mv -f ${tmpFile} ${inputFile}
+        return 0
+    fi
+}
+
+getValues() {
+    local inputFile=$1
+    local key="$2"
+    ${YQ_PATH} eval ''${key}'' ${inputFile} 2>/dev/null
+}
+
+applyValuesChange() {
+    write_log "loading" "Trying to update helm values ..."
+    if [ "$WAIT" == "true" ];then
+        waitOpt=" --wait --timeout 30m"
+    fi
+    exec_cmd "helm upgrade --debug ${RELEASE_NAME} ${CDF_HOME}/charts/${CHART_ITOM_APPHUB} --namespace ${CDF_NAMESPACE} --values $HELM_VALUE_FILE $waitOpt"
+    if [[ $? -ne 0 ]]; then
+        write_log "error" "Failed to run helm upgrade command:"
+        write_log "error" "helm upgrade --debug ${RELEASE_NAME} ${CDF_HOME}/charts/${CHART_ITOM_APPHUB} --namespace ${CDF_NAMESPACE} --values $HELM_VALUE_FILE $waitOpt"
+        return 1
+    fi
+}
+
+
+#############--main--#############
+
+CHART_NAME=${CHART_ITOM_APPHUB%*.tgz}
+if [[ -z "${CHART_NAME}" ]]; then
+    GREP_OPTION="-E"
+    CHART_NAME='apphub-[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+'
+fi
+RELEASE_NAME=$(helm list -n ${CDF_NAMESPACE} 2>/dev/null| grep ${GREP_OPTION} ${CHART_NAME}|awk '{print $1}')
+if [[ -z "${RELEASE_NAME}" ]]; then
+    RELEASE_NAME=apphub
+fi
+if [[ "${RUN_IN_POD}" != "true" ]]; then
+    if [[ ! -z "${CDF_HOME}" ]]; then
+        YQ_PATH="${CDF_HOME}/bin/yq"
+    else
+        YQ_PATH="${CURRENT_DIR}/yq"
+    fi
+else
+    YQ_PATH="yq"
+fi
+HELM_VALUE_FILE=${SCRIPT_TMP}/${RELEASE_NAME}-${CDF_NAMESPACE}-values.yaml
+HELM_VALUE_FILE_FULL=${SCRIPT_TMP}/${RELEASE_NAME}-${CDF_NAMESPACE}-values-full.yaml
+helm get values ${RELEASE_NAME} -n ${CDF_NAMESPACE} 2>/dev/null |grep -v "USER-SUPPLIED VALUES:" > ${HELM_VALUE_FILE}
+if [[ $? -ne 0 ]] || [[ $(${YQ_PATH} eval ${HELM_VALUE_FILE}|wc -l) -lt 10 ]]; then
+    write_log "fatal" "Failed to get old Helm values. Make sure you have installed CDF with Helm"
+fi
+helm get values ${RELEASE_NAME} -a -n ${CDF_NAMESPACE} 2>/dev/null |grep -v "USER-SUPPLIED VALUES:" > ${HELM_VALUE_FILE_FULL}
+if [[ $? -ne 0 ]] || [[ $(${YQ_PATH} eval ${HELM_VALUE_FILE_FULL}|wc -l) -lt 10 ]]; then
+    write_log "fatal" "Failed to get old Helm values. Make sure you have installed CDF with Helm"
+fi
+#make values file can not read by other user.
+chmod 600 ${HELM_VALUE_FILE}
+chmod 600 ${HELM_VALUE_FILE_FULL}
+KUBECTL_PATH="kubectl"
+if [[ "${RUN_IN_POD}" != "true" ]]; then
+    if [[ ! -z "${CDF_HOME}" ]]; then
+        JQ_PATH="${CDF_HOME}/bin/jq"
+    else
+        JQ_PATH="${CURRENT_DIR}/jq"
+    fi
+else
+    JQ_PATH="jq"
+fi
+preCheck
+if [[ "${RUN_IN_POD}" != "true" ]] ; then
+    if [[ -z "${CDF_NAMESPACE}" ]]; then
+        write_log "fatal" "Failed to get value of ENV CDF_NAMESPACE."
+    fi
+    #check if deployment namespace is exists.
+    NS_COUNT=$(${KUBECTL_PATH} get sa default -n ${CDF_NAMESPACE} 2>/dev/null|grep -v NAME|wc -l)
+    if [[ ${NS_COUNT} -eq 0 ]]; then
+        write_log "fatal" "The deployment namespace that in ENV CDF_NAMESPACE value: ${CDF_NAMESPACE} is not exists."
+    fi
+    if [[ "$COMPONENT" == "itom-cdf-api" ]];then
+        INSTANCE_NAME=apiserver
+        OLD_USER=$(getValues ${HELM_VALUE_FILE_FULL} '.cdfapiserver.deployment.database.user')
+        DB_PASSWORD_KEY=$(getValues ${HELM_VALUE_FILE_FULL} '.cdfapiserver.deployment.database.userPasswordKey')
+    else
+        INSTANCE_NAME=default
+        ## idm always using .idm.deployment.database.user
+        OLD_USER=$(getValues ${HELM_VALUE_FILE_FULL} '.idm.deployment.database.user')
+        DB_PASSWORD_KEY=$(getValues ${HELM_VALUE_FILE_FULL} '.idm.deployment.database.userPasswordKey')
+    fi
+    TLS_MIN_VERSION=$(getValues ${HELM_VALUE_FILE_FULL} '.global.tls.tlsMinVersion')
+    UPPER_INSTANCE_NAME=$(echo ${INSTANCE_NAME} | tr '[a-z]' '[A-Z]')
+
+    if [[ ${SSL} == "true" ]];then
+        if [[ ! -f "${CACERT_FILE}" ]]; then
+            write_log "fatal" "The file \"${CACERT_FILE}\" does not exist"
+        fi
+        PROTOCOL=TCPS
+    else
+        PROTOCOL=TCP
+    fi
+    if ( ( [[ -z ${DB_HOST} ]] || [[ -z ${DB_PORT} ]] || [[ -z ${DB_NAME} ]] ) && [[ -z ${DB_CONNECTION_URL} ]] ) || [[ -z ${DB_USERNAME} ]] ; then
+        write_log "info" "Usage: $0 <--component <itom-cdf-api/itom-idm>> <-u|--user <username>> <-H|--host <DB host>> <-p|--port <DB port>> <-d|--dbname <DB name>>"
+        write_log "info" "    or $0 <--component <itom-cdf-api/itom-idm>> <-u|--user <username>> <-U|--url <DB connection URL>>"
+        write_log "fatal" "       -h|--help           Show help."
+    fi
+    if [[ ${answer} != "Y" ]] && [[ "${OLD_USER}" != "${DB_USERNAME}" ]];then
+        read -p "Are you sure to change the ${COMPONENT} database user name from ${OLD_USER} to ${DB_USERNAME}? (Y/N): " answerChangeUser
+        if [ "$answerChangeUser" != "y" -a "$answerChangeUser" != "yes" -a "$answerChangeUser" != "Y" -a "$answerChangeUser" != "YES" ];then write_log "fatal" "QUIT."; fi
+    fi
+    while true ; do
+        readExternalDbInfo ${UPPER_INSTANCE_NAME}
+        if [[ -z ${DB_PASSWORD} ]] || [[ -z ${DB_USERNAME} ]]; then
+            echo "The password entered is not valid. Please re-enter again."
+            if [[ ${answer} == "Y" ]];then
+                write_log "fatal" "Make sure the password you input is valid."
+            fi
+        else
+            break
+        fi
+    done
+    if [[ -z "${DB_CONNECTION_URL}" ]]; then
+        if [[ "${DB_TYPE}" == "oracle" ]]; then
+            DB_CONNECTION_URL="jdbc:oracle:thin:@(DESCRIPTION=(ADDRESS=(PROTOCOL=${PROTOCOL})(HOST=${DB_HOST})(PORT=${DB_PORT}))(CONNECT_DATA=(SID=${DB_NAME})))"
+        elif [[ "${DB_TYPE}" == "postgresql" ]]; then
+            DB_CONNECTION_URL="jdbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME}"
+        fi
+    fi
+    write_log "loading" "Checking DB connection with input settings ..."
+    externalDbCheck
+    if [[ "$?" -ne 0 ]] ; then
+        write_log "fatal" "External database connection test failed, please check your external database configuration."
+    fi
+    if [[ "${DB_TYPE}" == "postgresql" ]] ; then
+        DB_SCHEMA=""
+    fi
+    write_log "loading" "Writing password into vault server ..."
+    runInPod writevault
+    if [[ "$COMPONENT" == "itom-cdf-api" ]];then
+        updateValues ${HELM_VALUE_FILE} '.cdfapiserver.deployment.database.dbUrl' "${DB_CONNECTION_URL}"
+        updateValues ${HELM_VALUE_FILE} '.cdfapiserver.deployment.database.user' "${DB_USERNAME}"
+        updateValues ${HELM_VALUE_FILE} '.cdfapiserver.deployment.database.internal' "false"
+        updateValues ${HELM_VALUE_FILE} '.cdfapiserver.deployment.database.tlsCert' "${CACRT_BASE64_CONTENT}"
+        updateValues ${HELM_VALUE_FILE} '.cdfapiserver.deployment.database.tlsEnabled' "${SSL}"
+        updateValues ${HELM_VALUE_FILE} '.cdfapiserver.deployment.database.host' "null"
+        updateValues ${HELM_VALUE_FILE} '.cdfapiserver.deployment.database.port' "null"
+        updateValues ${HELM_VALUE_FILE} '.cdfapiserver.deployment.database.dbName' "null"
+        if [[ ! -z "${DB_SCHEMA}" ]]; then
+            updateValues ${HELM_VALUE_FILE} '.cdfapiserver.deployment.database.schema' "${DB_SCHEMA}"
+        fi
+        if [[ ! -z "${DB_TLS_SKIP_HOSTNAME_VERIFICATION}" ]]; then
+            updateValues ${HELM_VALUE_FILE} '.cdfapiserver.deployment.database.tlsSkipHostnameVerification' "${DB_TLS_SKIP_HOSTNAME_VERIFICATION}"
+        fi
+    else
+        updateValues ${HELM_VALUE_FILE} '.global.database.dbUrl' "${DB_CONNECTION_URL}"
+        updateValues ${HELM_VALUE_FILE} '.global.database.internal' "false"
+        updateValues ${HELM_VALUE_FILE} '.global.database.tlsCert' "${CACRT_BASE64_CONTENT}"
+        updateValues ${HELM_VALUE_FILE} '.global.database.tlsEnabled' "${SSL}"
+        updateValues ${HELM_VALUE_FILE} '.global.database.host' "null"
+        updateValues ${HELM_VALUE_FILE} '.global.database.port' "null"
+        ##update apphub-apiserver settings as same as idm
+        updateValues ${HELM_VALUE_FILE} '.idm.deployment.database.user' "${DB_USERNAME}"
+        updateValues ${HELM_VALUE_FILE} '.apphub-apiserver.deployment.database.user' "${DB_USERNAME}"
+        updateValues ${HELM_VALUE_FILE} '.idm.deployment.database.dbName' "null"
+        updateValues ${HELM_VALUE_FILE} '.apphub-apiserver.deployment.database.dbName' "null"
+        if [[ ! -z "${DB_SCHEMA}" ]]; then
+            updateValues ${HELM_VALUE_FILE} '.idm.deployment.database.schema' "${DB_SCHEMA}"
+            updateValues ${HELM_VALUE_FILE} '.apphub-apiserver.deployment.database.schema' "${DB_SCHEMA}"
+        fi
+        if [[ ! -z "${DB_TLS_SKIP_HOSTNAME_VERIFICATION}" ]]; then
+            updateValues ${HELM_VALUE_FILE} '.global.database.tlsSkipHostnameVerification' "${DB_TLS_SKIP_HOSTNAME_VERIFICATION}"
+        fi
+    fi
+    applyValuesChange
+    if [[ $? != 0 ]]; then
+        write_log "fatal" "Failed to update ${UPPER_INSTANCE_NAME} database configuration."
+    fi
+    if [[ -d "${SCRIPT_TMP}" ]]; then
+        rm -rf ${SCRIPT_TMP}
+    fi
+    if [[ "$COMPONENT" == "itom-cdf-api" ]];then
+        write_log "info" "Update ${UPPER_INSTANCE_NAME} database configuration successfully."
+        exit 0
+    elif [[ "${WARRNING_FLAG}" == "1" ]]; then
+        write_log "info" "Update ${UPPER_INSTANCE_NAME} database configuration successfully."
+        exit 0
+    elif [[ "${WARRNING_FLAG}" == "0" ]]; then
+        write_log "info" "Update ${UPPER_INSTANCE_NAME} database configuration successfully."
+        exit 0
+    fi
+elif [[ "${RUN_IN_POD}" == "true" ]]; then
+    source /images.properties
+    if [[ "${WRITE_VAULT}" == "true" ]]; then
+        writeInVault
+    else
+        write_log "fatal" "Unknown option."
+    fi
+    if [[ -d "${SCRIPT_TMP}" ]]; then
+        rm -rf ${SCRIPT_TMP}
+    fi
+fi
+if [[ -d "${SCRIPT_TMP}" ]]; then
+    rm -rf ${SCRIPT_TMP}
+fi
+exit 0
