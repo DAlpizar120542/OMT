@@ -1,0 +1,332 @@
+#!/bin/bash
+# Copyright 2017 - 2024 Open Text.
+#
+# The only warranties for products and services of Open Text and its affiliates and licensors ("Open Text")
+# are as may be set forth in the express warranty statements accompanying such products and services.
+# Nothing herein should be construed as constituting an additional warranty. Open Text shall not be liable
+# for technical or editorial errors or omissions contained herein. The information contained herein is subject
+# to change without notice.
+#
+# Except as specifically indicated otherwise, this document contains confidential information and a valid
+# license is required for possession, use or copying. If this work is provided to the U.S. Government,
+# consistent with FAR 12.211 and 12.212, Commercial Computer Software, Computer Software
+# Documentation, and Technical Data for Commercial Items are licensed to the U.S. Government under
+# vendor's standard commercial license.
+
+#
+# return codes
+# 0 - success
+# 1 - unecpected error/ insufficient argument
+# 100 - config file does not exist
+# 101 - product/name not found specified config
+# collect logs and bundles in a zip for troubleshooting
+# usage <scriptname> -c <config_file> -d <dump_directory> -t <temp_list> -l <log_file>
+# 126,127- are error because of shell and invalid characters in script respectively
+
+#set -o errexit   # script fails if any error occurs
+#set -o nounset   # script fails if any unset variable is used
+#set -ue
+#set -x
+
+# This is for debugging purpose, set it always off once debugging is done.
+
+#see feature: OCTFT19S1761772
+if [[ "bash" != "$(readlink /proc/$$/exe | xargs basename)" ]]; then
+    echo "Error: only bash support, current shell: $(readlink /proc/$$/exe)"
+    exit 1
+fi
+set +o posix
+
+_DEBUG="off"
+
+function DEBUG() {
+    if [ "$_DEBUG" == "on" ]; then
+        echo "$*"
+    fi
+}
+
+DEBUG echo 'Starting the script..'
+
+# initialization
+LOGFILE=
+
+SUPPORT_DUMP_DIR=
+
+LOCAL_IP=$(ip route get 8.8.8.8 | sed 's/^.*src \([^ ]*\).*$/\1/;q')
+
+# variable that stores configuration file passed on command line
+# each partner has one configuration file, Atlas is also a partner for this script.
+# There is one common file which has OS related logs to collect
+CONFIGFILE=
+
+# define Array of commands present in configuration file
+CMDS=()
+
+# LOGFILES/<productname>
+PRODUCTLOGSDIR=
+# PRODUCTLOGSDIR/commands
+PRODUCTCOMMANDS=
+
+#Standby directive -Using this for checking the presence of the directive and removing it from the command/file/directory string
+EXCLUDE_VARIABLE='\[NotNeededOnStandby\]'
+
+# This variable will come from the call and from the support-dump.py and support-dump script
+hasToExclude="false"
+
+getRfcTime() {
+    local fmt=$1
+    date --rfc-3339=${fmt} | sed 's/ /T/'
+}
+
+# it logs text to logfile
+log() {
+    local logTimeFmt=$(getRfcTime 'ns')
+    echo -e "$logTimeFmt DEBUG $*" >>$LOGFILE 2>&1
+}
+
+# it logs text to logfile and exits to program by returning exit status 1
+logExit() {
+    local logTimeFmt=$(getRfcTime 'ns')
+    echo -e "$logTimeFmt ERROR $*" >>$LOGFILE 2>&1
+    exit $2
+}
+
+# display's usage of the script, we dont support this script to be run thru command line
+usage() {
+    echo -e "Usage: \n${@}can only be run through support-dump script."
+    exit 1
+}
+
+# checks if file exist return 0 for success else 1
+function checkFile() {
+    if [ -f $1 ]; then
+        log "File: $1 already exist."
+    else
+        log "file: $1 doesnt exist"
+        return 1
+    fi
+    return 0
+}
+
+function processCommands() {
+    echo -n "Running OS commands in list ....... "
+    # Get the list of command to be processed, check if list is empty
+    if [[ "${#CMDS[*]}" != 0 ]]; then
+        log "Commands need to be run/copied are: ${CMDS[*]}"
+        local count=${#CMDS[@]}
+        log "Total No. of commands need to run are: $count"
+
+        for ((i = count - 1; i >= 0; i--)); do
+            local cmd="${CMDS[$i]}"
+            #read  -rd '' cmd <<< "$cmd"
+            # now run this command in background with some timeout value
+            # what if command fails? : we will still log reason and continue
+            # what is command times out?: we will still log reason and continue
+
+            # Get file name whcih will have the command output
+            local cmdName="${cmd%% *}"
+            cmdName=$(basename $cmdName)
+            cmdLogFile="${PRODUCTCOMMANDS}/${cmdName}.out"
+            if [ -e $cmdLogFile ]; then
+                log "filename already exist, we want to append to it."
+            fi
+            echo "================================================" >>$cmdLogFile 2>&1
+            echo "COMMAND: $cmd" >>$cmdLogFile 2>&1
+            echo "================================================" >>$cmdLogFile 2>&1
+            DEBUG echo "out put of command: $cmd \n" >>$cmdLogFile 2>&1
+            eval timeout 900 $cmd >>$cmdLogFile 2>&1
+            exitcode=$?
+            if [ $exitcode -eq 0 ]; then
+                log "Command $cmd executed successfully."
+            elif [ $exitcode -eq 124 ]; then
+                echo "The command timedout." >>$cmdLogFile 2>&1
+                log "Command $cmd timedout"
+            else
+                log "Command $cmd: executed with return code: $exitcode"
+            fi
+        done
+    fi
+    echo done
+}
+
+# Check is the passed argument which is command/file/directory needed to be excluded from a
+# support dump created on a standby node
+# return 1 if needed to be excluded
+# return 0 if needed to be included
+function checkIfStringToBeExcluded() {
+    string_passed="$1"
+    #Removing the directive from the string passed
+    actual_string=$(echo "$string_passed" | sed -e "s/$EXCLUDE_VARIABLE//gI")
+    if [ "$hasToExclude" = "true" ]; then
+        #Checking if the string passed contains the directive
+        exclude_factor=$(echo "$string_passed" | grep -i "$EXCLUDE_VARIABLE" | wc -l)
+        if [ "$exclude_factor" -eq 1 ]; then
+            log "$actual_string has to be excluded from this support-dump created on standby"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# Creates a directory, checks if already exist then doesnt do anything else creates it.
+# return 0 for success
+function createDir() {
+    if [ -e $1 ]; then
+        log "File/Directory: $1 already exist."
+    elif [ ! -d $1 ]; then
+        log "Directory: $1 doesnt exist, creating.."
+        /bin/mkdir -pv $1 >>$LOGFILE 2>&1
+        log "Directory: $1 created successfully."
+    fi
+}
+
+######################################################################
+# MAIN PROGRAM
+######################################################################
+main() {
+    local productFlag=0
+    local dirFlag=0
+    local fileFlag=0
+    local commandFlag=0
+    local productval=
+    local fileSize=0
+
+    DEBUG set -x
+    # Check the parameters
+
+    if [ $# -le 9 ]; then
+        echo "insufficient arguments!"
+        usage
+    fi
+
+    LOGFILE=${8}
+
+    log "no of parameters are correct."
+    log "parsing parametrs for validation"
+
+    # Reading command line arguments and validating and assigning.
+    while getopts "c:d:t:l:s:P:" opt; do
+        case $opt in
+        c)
+            CONFIGFILE=$OPTARG
+            log "CONFIGFILE: $CONFIGFILE"
+            ;;
+        d)
+            SUPPORT_DUMP_DIR=$OPTARG
+            log "SUPPORT_DUMP_DIR: $SUPPORT_DUMP_DIR"
+            ;;
+        t)
+            TEMPLIST=$OPTARG
+            log "TEMPLIST: $TEMPLIST"
+            ;;
+        l)
+            log "logfiles assignment is already done."
+            ;;
+        s)
+            hasToExclude=$OPTARG
+            log "Standby appliance flag is set - $hasToExclude"
+            ;;
+        P)
+            PRODUCT=$OPTARG
+            log "Product Name: $PRODUCT"
+            ;;
+        *)
+            echo "invalid option: ${@}"
+            usage
+            ;;
+        esac
+    done
+
+    echo -n "Making OS commands & files list ... "
+
+    # Read config file and assign values
+    log "Checking if config file exists."
+    checkFile "$CONFIGFILE"
+    if [[ "$?" != 0 ]]; then
+        logExit "$CONFIGFILE: Configuration file does not exist." 100
+    else
+        log "Config file exists. continue..."
+    fi
+
+    log "parsing parametrs/validation done for config file."
+
+    # first check if config file really exist if not return the error  wih message
+
+    productval=${PRODUCT:-ITOM_Core_Platform}
+    DEBUG echo "its product : $productval"
+
+    shopt -s nocasematch
+    while read -r line; do
+        case $line in
+        \#* | "")
+            DEBUG echo "empty line"
+            ;;
+        "[dirs]")
+            commandFlag=0
+            fileFlag=0
+            dirFlag=1
+            ;;
+        "[files]")
+            commandFlag=0
+            fileFlag=1
+            dirFlag=0
+            ;;
+        "[commands]")
+            commandFlag=1
+            fileFlag=0
+            dirFlag=0
+            ;;
+        *)
+            local var=$(echo "$line" | grep -o "\${\?[a-zA-Z0-9|_]*}\?")
+            if [ -z "$var" ]; then
+                local actual_line=$line
+            else
+                local actual_var="$(eval echo $var)"
+                local actual_line=$(echo "$line" | sed "s@\${\?[a-zA-Z0-9|_]*}\?@${actual_var}@g")
+            fi
+
+            if [[ $commandFlag -eq 1 ]]; then
+                DEBUG echo "Its command: $actual_line"
+                command_string="$actual_line"
+                actual_command=$(echo "$command_string" | sed -e "s/$EXCLUDE_VARIABLE//gI")
+                if checkIfStringToBeExcluded "$command_string"; then
+                    log "writing $actual_command command to CMDLIST"
+                    CMDS+=("$actual_command")
+                fi
+            elif [ "$dirFlag" -eq 1 ] || [ "$fileFlag" -eq 1 ]; then
+                file_string="$actual_line"
+                actual_file=$(echo "$file_string" | sed -e "s/$EXCLUDE_VARIABLE//gI")
+                if checkIfStringToBeExcluded "$file_string"; then
+                    log "writing $actual_file file or folder to TEMPLIST"
+                    echo $productval" ""$actual_file" >>$TEMPLIST
+                fi
+            fi
+            ;;
+        esac
+    done <"$CONFIGFILE"
+    shopt -u nocasematch
+
+    # create product directory in support dump directory
+    PRODUCTDIR="${SUPPORT_DUMP_DIR}/${productval}"
+    createDir "${PRODUCTDIR}"
+
+    if [ -d $PRODUCTDIR/${LOCAL_IP}-* ]; then
+        PRODUCTLOGSDIR=$PRODUCTDIR/$(basename $PRODUCTDIR/${LOCAL_IP}-*)/os
+    else
+        PRODUCTLOGSDIR=$PRODUCTDIR/$LOCAL_IP/os
+    fi
+    createDir "${PRODUCTLOGSDIR}"
+
+    # create commands directory in product directory
+    PRODUCTCOMMANDS="${PRODUCTLOGSDIR}/commands"
+    createDir "${PRODUCTLOGSDIR}/commands"
+
+    echo done
+
+    # process commands. save command output in commands directory
+    processCommands
+
+    # echo 0
+}
+
+main $@

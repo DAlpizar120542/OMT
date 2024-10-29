@@ -1,0 +1,309 @@
+#!/bin/bash
+# Copyright 2017 - 2024 Open Text.
+#
+# The only warranties for products and services of Open Text and its affiliates and licensors ("Open Text")
+# are as may be set forth in the express warranty statements accompanying such products and services.
+# Nothing herein should be construed as constituting an additional warranty. Open Text shall not be liable
+# for technical or editorial errors or omissions contained herein. The information contained herein is subject
+# to change without notice.
+#
+# Except as specifically indicated otherwise, this document contains confidential information and a valid
+# license is required for possession, use or copying. If this work is provided to the U.S. Government,
+# consistent with FAR 12.211 and 12.212, Commercial Computer Software, Computer Software
+# Documentation, and Technical Data for Commercial Items are licensed to the U.S. Government under
+# vendor's standard commercial license.
+
+#
+# return codes
+# 0 - success
+# 1 - unecpected error/ insufficient argument
+# 100 - config file does not exist
+# 101 - product/name not found specified config
+# collect logs and bundles in a zip for troubleshooting
+# usage <scriptname> -t <config_file> -e <exclude_list> -d <dump_directory> -l <log_file>
+# 126,127- are error because of shell and invalid characters in script respectively
+
+# set -o errexit   # script fails if any error occurs
+# set -o nounset   # script fails if any unset variable is used
+# set -ue
+#set -x
+
+# This is for debugging purpose, set it always off once debugging is done.
+
+#see feature: OCTFT19S1761772
+if [[ "bash" != "$(readlink /proc/$$/exe | xargs basename)" ]]; then
+    echo "Error: only bash support, current shell: $(readlink /proc/$$/exe)"
+    exit 1
+fi
+set +o posix
+
+_DEBUG="off"
+
+function DEBUG() {
+    if [ "$_DEBUG" == "on" ]; then
+        echo "$*"
+    fi
+}
+
+DEBUG echo 'Strating the script..'
+
+TOTALSIZE=0
+
+# initialization
+LOGFILE=
+
+LOCAL_IP=$(ip route get 8.8.8.8 | sed 's/^.*src \([^ ]*\).*$/\1/;q')
+
+TEMPLIST=
+LINESTOREMOVE=("")
+
+# Support dump dedicated partition
+SUPPORTDUMPPARTITION='support_dump'
+
+# Support dump shared partition
+SUPPORTDUMPPARTITIONSHARED='backup_staging'
+
+getRfcTime() {
+    local fmt=$1
+    date --rfc-3339=${fmt} | sed 's/ /T/'
+}
+
+# it logs text to logfile
+log() {
+    local logTimeFmt=$(getRfcTime 'ns')
+    echo -e "$logTimeFmt DEBUG $*" >>$LOGFILE 2>&1
+}
+
+# it logs text to logfile and exits to program by returning exit status 1
+logExit() {
+    local logTimeFmt=$(getRfcTime 'ns')
+    echo -e "$logTimeFmt ERROR $*" >>$LOGFILE 2>&1
+    exit $2
+}
+
+# Creates a directory, checks if already exist then doesnt do anything else creates it.
+# return 0 for success
+function createDir() {
+    if [ -e $1 ]; then
+        log "File/Directory: $1 already exist."
+    elif [ ! -d $1 ]; then
+        log "Directory: $1 doesnt exist, creating.."
+        /bin/mkdir -pv $1 >>$LOGFILE 2>&1
+        log "Directory: $1 created successfully."
+    fi
+}
+
+# copies source file or directory to destination
+# return 0 for success else 1 for failure
+function copyDir() {
+    log "running command cp -RHvsp --remove-destination $1 $2 ::"
+    /bin/cp -RHvsp --remove-destination $1 $2 >>$LOGFILE 2>&1 && log "Directory/File $1 copied to : $2 successfully" || log "Directory/File $1 omitted"
+}
+
+# display's usage of the script, we dont support this script to be run thru command line
+usage() {
+    echo -e "Usage: \n${@}can only be run through support-dump script."
+    exit 1
+}
+
+# checks if file exist return 0 for success else 1
+function checkFile() {
+    if [ -f $1 ]; then
+        log "File: $1 already exist."
+    else
+        log "file: $1 doesnt exist"
+        return 1
+    fi
+    return 0
+}
+
+# returns the file/folder size of the argument
+# return 0 if not found
+function findSize() {
+    if [ $(
+        ls $1 >/dev/null 2>&1
+        echo $?
+    ) -eq 0 ]; then
+        log "here""$1"
+        local FILESIZE=$(ls -lR $@ | grep -v '^d' | awk '{total += $5} END {print total}') >/dev/null 2>&1
+        echo "$FILESIZE"
+    else
+        echo 0
+    fi
+}
+
+######################################################################
+# MAIN PROGRAM
+######################################################################
+main() {
+    local productval=
+    local fileSize=0
+    local escapedString=
+    local continueTokenFlag=1
+    count=0
+
+    echo -n "Collecting OS files in list ....... "
+
+    DEBUG set -x
+    # Check the parameters
+
+    if [ $# -ne 8 ]; then
+        echo "insufficient arguments!"
+        usage
+    fi
+    # Assign log file
+    LOGFILE=${8}
+
+    log "no of parameters are correct."
+    log "parsing parametrs for validation"
+
+    # Reading command line arguments and validating and assigning.
+    while getopts "t:e:d:l:" opt; do
+        case $opt in
+        t)
+            TEMPLIST=$OPTARG
+            log "TEMPLIST: $TEMPLIST"
+            ;;
+        e)
+            EXCLUDELIST=$OPTARG
+            log "EXCLUDELIST: $EXCLUDELIST"
+            ;;
+        d)
+            SUPPORT_DUMP_DIR=$OPTARG
+            # check if '/support_dump' partiotion exists.
+            # If yes, find remaining space
+            # If no, find remaining space of / partition
+            # We get the available size on KB
+            if [ -d "/$SUPPORTDUMPPARTITION" ]; then
+                SPACEAVAILABLE=$(df -P | column -t | awk -v d=$SUPPORTDUMPPARTITION '{ if($6=="/"d) print $4}')
+            elif [ -d "/$SUPPORTDUMPPARTITIONSHARED" ]; then
+                SPACEAVAILABLE=$(df -P | column -t | awk -v d=$SUPPORTDUMPPARTITIONSHARED '{ if($6=="/"d) print $4}')
+            else
+                SPACEAVAILABLE=$(df -P | column -t | awk '{ if($6=="/") print $4}')
+            fi
+            # we take only half of space left. (to account for encryption)
+            # Convert size to Bytes
+            SPACEAVAILABLE=$(expr $SPACEAVAILABLE \* 512)
+            log "SUPPORT_DUMP_DIR: $SUPPORT_DUMP_DIR"
+            log "Space left: $SPACEAVAILABLE"
+            ;;
+        l)
+            log "logfiles assignment is already done."
+            ;;
+        *)
+            echo "invalid option: ${@}"
+            usage
+            ;;
+        esac
+    done
+
+    # Read config file and assign values
+    log "Checking if config file exists."
+    checkFile "$TEMPLIST"
+    if [[ "$?" != 0 ]]; then
+        logExit "$TEMPLIST: Temporary list of files/folders does not exist." 100
+    else
+        log "Config file exists. continue..."
+    fi
+
+    log "parsing parametrs/validation done for config file."
+
+    shopt -s nocasematch
+    while read -r line; do
+        count=$(($count + 1))
+        case "$line" in
+        \#* | "")
+            DEBUG echo "empty line"
+            ;;
+        *)
+            # increment processed line count
+            if [[ $continueTokenFlag -eq 1 ]]; then
+                # skipping continue token
+                continueTokenFlag=0
+            else
+                # file or folder
+                files=$(echo "$line" | wc -w)
+                if [[ $files > 2 ]]; then
+                    # line with exclude feature
+                    log "line with exclude: ""$line"
+                    # Get the file or directory
+                    dir=$(echo "$line" | awk '{ print $2 }')
+                    rest=$(echo "$line" | awk '{$NR="";print}')
+                    excludes=$(echo $rest | awk '{gsub("\\(|)|exclude","");print}')
+                    # write to exclude list with product directory as prefix
+                    # Eg: appliance/ci/logs/jetty-Cert/startup.log
+                    #     appliance/ci/logs/jetty-Cert/server.log
+                    #     appliance/ci/logs/ciRequestId.01.log
+                    # echo "$excludes" | awk -v q="'" 'BEGIN{ORS="";}{ for (i=1; i<=NF; i++) if(i == 1) print " -name "q $i q; else print " -o -name " q $i q; }' | xargs find -L $dir | sed -e "s/^/${productval}/" >> $EXCLUDELIST
+                    echo "$excludes" | awk -v q="'" 'BEGIN{ORS="";}{ for (i=1; i<=NF; i++) if(i == 1) print " -name "q $i q; else print " -o -name " q $i q; }' | xargs find -L $dir | sed -e "s/^\///" >>$EXCLUDELIST
+                else
+                    # line without exclude feature
+                    log "line without exclude: ""$line"
+                    # Get the file or directory
+                    dir=$(echo "$line" | awk '{ print $2 }')
+                fi
+                # Get the product
+                productval=$(echo "$line" | awk '{ print $1 }')
+
+                PRODUCTDIR="${SUPPORT_DUMP_DIR}/${productval}"
+                createDir "${PRODUCTDIR}"
+
+                if [ -d $PRODUCTDIR/${LOCAL_IP}-* ]; then
+                    PRODUCTLOGSDIR=$PRODUCTDIR/$(basename $PRODUCTDIR/${LOCAL_IP}-*)/os
+                else
+                    PRODUCTLOGSDIR=$PRODUCTDIR/$LOCAL_IP/os
+                fi
+                createDir "${PRODUCTLOGSDIR}"
+
+                fileSize=$(findSize "$dir")
+                log "size: $fileSize"
+                if [[ $TOTALSIZE -ne 0 ]] || [[ $fileSize -ne 0 ]]; then
+                    let "TOTALSIZE+=$fileSize"
+                fi
+                # Check whether the file/directory can fit
+                if [[ $TOTALSIZE -gt $SPACEAVAILABLE ]]; then
+                    # No space left. Ending part creation. Remove collected files from TEMPLIST
+                    var=$(
+                        IFS=$';'
+                        echo "${LINESTOREMOVE[*]}"
+                    )
+                    sed -i "$var" "$TEMPLIST"
+                    log "No more space available to accomodate files/folders"
+                    #                        copy_cgi_log
+                    #                        copy_dump_flag
+                    echo 1
+                    exit
+                fi
+
+                # check if file or folder exists
+                if [ $(
+                    ls $dir >/dev/null 2>&1
+                    echo $?
+                ) -eq 0 ]; then
+                    # collect file / folder
+                    filesWithDIRStructure="${PRODUCTLOGSDIR}/$(dirname "$dir" | sed 's/^\///g')"
+                    createDir $filesWithDIRStructure
+                    copyDir "$dir" "${filesWithDIRStructure}/"
+                else
+                    log "files/folder doensnt exists: $dir"
+                fi
+                # add to line to remove from TEMPLIST
+                LINESTOREMOVE+=($count"d")
+            fi
+            ;;
+        esac
+    done <"$TEMPLIST"
+    shopt -u nocasematch
+
+    #    copy_cgi_log
+    #    copy_dump_flag
+
+    # reaching here means complete support dump is generated.
+    # clearing TEMPLIST
+    /bin/rm -f "$TEMPLIST" >>$LOGFILE 2>&1
+
+    echo done
+    # echo 0
+}
+
+main $@

@@ -1,0 +1,141 @@
+#!/bin/bash
+
+# Copyright 2017 - 2024 Open Text.
+#
+# The only warranties for products and services of Open Text and its affiliates and licensors ("Open Text")
+# are as may be set forth in the express warranty statements accompanying such products and services.
+# Nothing herein should be construed as constituting an additional warranty. Open Text shall not be liable
+# for technical or editorial errors or omissions contained herein. The information contained herein is subject
+# to change without notice.
+#
+# Except as specifically indicated otherwise, this document contains confidential information and a valid
+# license is required for possession, use or copying. If this work is provided to the U.S. Government,
+# consistent with FAR 12.211 and 12.212, Commercial Computer Software, Computer Software
+# Documentation, and Technical Data for Commercial Items are licensed to the U.S. Government under
+# vendor's standard commercial license.
+
+#see feature: OCTFT19S1761772
+if [[ "bash" != "$(readlink /proc/$$/exe|xargs basename)" ]];then
+    echo "Error: only bash support, current shell: $(readlink /proc/$$/exe)"
+    exit 1
+fi
+set +o posix
+
+usage() {
+  echo "Usage: ./getRestoreToken.sh [-n <namespace>]"
+  echo "       -n|--namespace    Specify the namespace to get the token(default is \$CDF_NAMESPACE)."
+  echo "       -h|--help         Show help."
+}
+
+while [[ ! -z $1 ]] ; do
+    step=2 ##shift step,default 2
+    case "$1" in
+        -n|--namespace) #not using setOptionVal to support password contains special chars
+        case "$2" in
+            -*) echo "-n|--namespace parameter requires a value. " ; exit 1 ;;
+            *)  if [[ -z $2 ]] ; then echo "-n|--namespace parameter requires a value. " ; exit 1 ; fi ; NAMESPACE=$2 ; ;;
+        esac ;;
+        *|-*|-h|--help|/?|help)
+            if [[ "$1" != "-h" ]] && [[ "$1" != "--help" ]] && [[ "$1" != "help" ]] ; then
+                echo "invalid parameter $1"; usage; exit 1
+            fi
+            usage; exit 0
+            ;;
+    esac
+    shift $step
+done
+
+
+set -o pipefail
+if [ -f "/etc/profile.d/itom-cdf.sh" ]; then
+    source /etc/profile.d/itom-cdf.sh 2>/dev/null
+fi
+if [ -f "$HOME_FOLDER/itom-cdf.sh" ]; then
+    source $HOME_FOLDER/itom-cdf.sh 2>/dev/null
+fi
+if [ -n "$TMP_FOLDED" ];then
+  logFile=$TMP_FOLDED/postgres_backup.log
+else
+  logFile=/tmp/postgres_backup.log
+fi
+CDF_NAMESPACE=${CDF_NAMESPACE:-"core"}
+NAMESPACE=${NAMESPACE:-"$CDF_NAMESPACE"}
+
+exec_cmd(){
+  "${CDF_HOME}"/bin/cmd_wrapper -c "$1" -f "$logFile" -x "DEBUG" $2 $3 $4 $5
+}
+
+
+#check if either cdf-apiserver-db or idm-db are embeded
+checkValid(){
+  if [ "$NAMESPACE" == "$CDF_NAMESPACE" ];then
+    local releaseName="apphub"
+    if [ "$(helm list -q -n "$CDF_NAMESPACE" | grep -c "$releaseName" )" -eq 0 ];then
+      echo "Error: apphub is not deployed!"; exit 1
+    fi
+
+    #if .Values.global.database.internal=true:  both idm and cdf-apiserver using embeded db
+    #if .Values.global.database.internal=false: idm using external db
+    #if .Values.global.database.internal=false && .Values.cdfapiserver.deployment.database.internal=true: cdf-apiserver using embeded db
+    #if .Values.global.database.internal=false && .Values.cdfapiserver.deployment.database.internal=false: cdf-apiserver using external db
+    local cdfapiserverInternal globalInternal deploymentManagement
+    deploymentManagement=$(helm get values $releaseName -n "$CDF_NAMESPACE" 2>/dev/null | yq e '.global.services.deploymentManagement' -)
+    if [ "$deploymentManagement" == "false" ];then
+      echo "Error: not support when deployment management capability is false!"
+      exit 1
+    fi
+    cdfapiserverInternal=$(helm get values $releaseName -n "$CDF_NAMESPACE" 2>/dev/null | yq e '.cdfapiserver.deployment.database.internal' -)
+    globalInternal=$(helm get values $releaseName -n "$CDF_NAMESPACE" 2>/dev/null | yq e '.global.database.internal' -)
+    if [ "$globalInternal" == "false" ] && [ "$cdfapiserverInternal" == "false" ];then
+      echo "Error: both idm db and cdf-apiserver db are external!" exit 1
+    fi
+  else
+    #if have ns list privillage, we should check if user provided ns is correct or not
+    if [ $(exec_cmd "kubectl auth can-i get ns -q 2>/dev/null" -p=false; echo $?) -eq 0 ];then
+      local nss found="false"
+      nss=$(exec_cmd "kubectl get ns --no-headers | awk '{print $1}' | xargs" -p=true)
+      if [ $? -eq 0 ];then
+        for ns in $nss; do
+          if [ "$ns" == "$NAMESPACE" ];then
+            found="true"
+            break
+          fi
+        done
+        if [ "$found" == "false" ];then
+          echo "Error: incorrect namespace: $NAMESPACE!"; exit 1
+        fi
+      fi
+    fi
+
+    #check if pg-backup svc is exist or not
+    if [ $(exec_cmd "kubectl get deploy -n $NAMESPACE --no-headers | grep \"pg-backup\" | wc -l 2>/dev/null" -p=true) -eq 0 ];then
+      echo "Error: no pg-backup service exists!"; exit 1
+    fi
+  fi
+}
+
+getAuthorization() {
+  local backupdApiKey backupPodName
+  backupdApiKey=$(kubectl get cm itom-pg-backup-config -n "${NAMESPACE}" -o json 2>/dev/null | jq -r '.data.ITOM_BACKUPD_API_KEY_VAULT')
+  backupPodName=$(exec_cmd "kubectl get pods -n ${NAMESPACE}  | awk '{print \$1,\$3}' 2>/dev/null | grep 'Running' |awk '/itom-pg-backup/ {print \$1}'" -p=true)
+
+  if [ -n "$backupdApiKey" -a -n "${backupPodName}" ]; then
+      backupdApiToken=$(exec_cmd "kubectl exec ${backupPodName} -n ${NAMESPACE} -c itom-pg-backup --  /bin/get_secret $backupdApiKey" -p=true)
+      if [ $? ==  0 ]; then
+            echo "Authorization token: ${backupdApiToken:5}"
+            return 0
+      else
+            echo "Failed to obtain authorization token. Unable to read the Vault secret."
+            echo "Error details: ${logFile}"
+            return 1
+      fi
+  else
+      echo "Failed to obtain authorization token. Unable to find any backup pods or the backup password key."
+      echo "Error details: ${logFile}"
+      return 1
+  fi
+}
+
+
+checkValid
+getAuthorization

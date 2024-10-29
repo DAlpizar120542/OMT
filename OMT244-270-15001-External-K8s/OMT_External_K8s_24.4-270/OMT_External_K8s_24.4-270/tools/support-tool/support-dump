@@ -1,0 +1,466 @@
+#!/bin/bash
+# Copyright 2017 - 2024 Open Text.
+#
+# The only warranties for products and services of Open Text and its affiliates and licensors ("Open Text")
+# are as may be set forth in the express warranty statements accompanying such products and services.
+# Nothing herein should be construed as constituting an additional warranty. Open Text shall not be liable
+# for technical or editorial errors or omissions contained herein. The information contained herein is subject
+# to change without notice.
+#
+# Except as specifically indicated otherwise, this document contains confidential information and a valid
+# license is required for possession, use or copying. If this work is provided to the U.S. Government,
+# consistent with FAR 12.211 and 12.212, Commercial Computer Software, Computer Software
+# Documentation, and Technical Data for Commercial Items are licensed to the U.S. Government under
+# vendor's standard commercial license.
+
+#see feature: OCTFT19S1761772
+if [[ "bash" != "$(readlink /proc/$$/exe | xargs basename)" ]]; then
+    echo "Error: only bash support, current shell: $(readlink /proc/$$/exe)"
+    exit 1
+fi
+set +o posix
+
+if [[ -f "/etc/profile.d/itom-cdf.sh" ]]; then
+    source "/etc/profile.d/itom-cdf.sh"
+fi
+if [ -z "$CDF_NAMESPACE" ]; then
+    echo "Error: CDF namespace not found!"
+    exit 1
+fi
+
+# this is a temporary log file location
+LOGFILES=$CDF_HOME/log/support-dump
+
+# create this directory as we always need it to start creating logs, if this fails we exit from here with reason.
+/bin/mkdir -pv "$LOGFILES" >/dev/null
+
+# initilization of variables
+# This is log file for this script
+PRODUCT=ITOM_Core_Platform
+FORMATTED_DATE=$(date "+%Y%m%d-%H%M%S")
+LOGFILENAME=support_data.$(date "+%Y%m%d%H%M%S").log
+LOGFILE=${LOGFILES}/${LOGFILENAME}
+SUPPORTDUMPNAME=dmp/support_data_${FORMATTED_DATE}
+SUPPORT_DUMP_BASE=
+TEMPLIST=
+TEMPLISTFILE="templist"
+EXCLUDELIST=
+EXCLUDELISTFILENAME="excludelist"
+SCRIPTLOCATION=${CDF_HOME}/tools/support-tool
+CONFIGLOCATION="${SCRIPTLOCATION}/conf"
+USERNAME=
+PASSWORD=
+
+getRfcTime() {
+    local fmt=$1
+    date --rfc-3339=${fmt} | sed 's/ /T/'
+}
+
+# it logs text to logfile
+log() {
+    local logTimeFmt=$(getRfcTime 'ns')
+    echo -e "$logTimeFmt DEBUG $*" >>$LOGFILE 2>&1
+}
+
+# it logs text to logfile and exits to program by returning exit status 1
+logExit() {
+    local logTimeFmt=$(getRfcTime 'ns')
+    echo -e "$logTimeFmt ERROR $*" >>$LOGFILE 2>&1
+    exit $2
+}
+
+# display's usage of the script, we dont support this script to be run thru command line
+usage() {
+    echo -e "Usage: support-dump [Option]"
+    echo -e "Options: "
+    echo -e "    -c : creates support dump. Default: ./dmp/support_data_YYYYMMDD-hhmmss.aes."
+    echo -e "         if --no-encrypt-output is set, default is ./dmp/support_data_YYYYMMDD-hhmmss.tgz."
+    echo -e "    -u : admin user name of OMT."
+    echo -e "    -p : password."
+    echo -e "    -P : package password."
+    echo -e "    -y : Answer yes for any confirmations."
+    echo -e "    -h : print this help."
+    echo -e "    --no-encrypt-output : not encrypt the output."
+    echo -e "-------------------------------------------------------------------------------------"
+    echo -e "Examples:"
+    echo -e "    creates a dumpfile support_data_YYYYMMDD-hhmmss.aes inside ./dmp"
+    echo -e "        support-dump\n"
+    echo -e "    creates a dumpfile dump.aes inside /var/test"
+    echo -e "        support-dump -c /var/test/dump.aes\n"
+    echo -e "    create a dumpfile with management port username, password and package password"
+    echo -e "        support-dump -u admin -p 123456 -P abcdef\n"
+    echo -e "    create a dumpfile without encrypt the output"
+    echo -e "        support-dump --no-encrypt-output\n"
+}
+
+# creates a zip file after collecting different log files
+# return 0 for success else 1 for failure
+function zipDir() {
+    log "packing dump files ..."
+    local zip_file=$1
+    if [ -z "$NOENCRYPTOUTPUT" ]; then
+        local uncompressPrompt="dd if=$zip_file |openssl aes-256-cbc -d -md sha1 -k <your_password>|tar zxf -"
+    else
+        local uncompressPrompt="tar -zxf $zip_file"
+    fi
+
+    if [ -e $zip_file ]; then
+        rm -f $zip_file
+    fi
+
+    log "running command in $SUPPORT_DUMP_DIR: tar --warning=none  -X \"$EXCLUDELIST\" -cvzhf $zip_file *"
+    cd $SUPPORT_DUMP_DIR/
+    if [ -z "$NOENCRYPTOUTPUT" ]; then
+        tar --warning=none -X "$EXCLUDELIST" -cvzhf - * | openssl aes-256-cbc -salt -md sha1 -k $P_PASSWORD | dd of=$zip_file
+    else
+        tar --warning=none -X "$EXCLUDELIST" -cvzhf - * | dd of=$zip_file
+    fi
+    local tarout=$?
+    unset P_PASSWORD
+    cd -
+    if [ $tarout -le 1 ]; then
+        echo "file created : $zip_file successfully, using $SUPPORT_DUMP_DIR/"
+        echo "Please use below command uncompress it:"
+        echo "$uncompressPrompt"
+        log "file created : $zip_file successfully, using $SUPPORT_DUMP_DIR/"
+    else
+        logExit "Error occurred during tarball $SUPPORT_DUMP_BASE" $tarout
+    fi
+}
+
+# Creates a directory, checks if already exist then doesnt do anything else creates it.
+# return 0 for success
+function createDir() {
+    if [ ! -d $1 ]; then
+        /bin/mkdir -pv $1 >>$LOGFILE 2>&1
+        log "Directory: $1 created."
+    fi
+}
+
+# Removes the temporary list of files
+# return 0 for success
+function removeTempFile() {
+    /bin/rm -f "$SUPPORT_DUMP_BASE""/""$TEMPLISTFILE"
+
+}
+
+getThisNode() {
+    local thisNode=
+    local all_nodes=$1
+    local local_ips=
+    local local_hostname=
+    local local_shortname=
+    local_ips=$(ifconfig | grep -Eo 'inet (addr:)?([0-9]*\.){3}[0-9]*' | grep -Eo '([0-9]*\.){3}[0-9]*' | grep -v '127.0.0.1')
+    local_hostname=$(hostname -f | tr '[:upper:]' '[:lower:]')
+    local_shortname=$(hostname -s | tr '[:upper:]' '[:lower:]')
+    for node in ${all_nodes}; do
+        lower_node=$(echo $node | tr '[:upper:]' '[:lower:]')
+        if [[ "$local_hostname" == "$lower_node" ]]; then
+            thisNode="$local_hostname"
+            break
+        else
+            for ip in $local_ips; do
+                if [ "$node" == "$ip" ]; then
+                    thisNode="$ip"
+                    break
+                fi
+            done
+        fi
+        # shortname
+        if [[ "$local_shortname" == "$lower_node" ]]; then
+            thisNode="$local_shortname"
+            break
+        fi
+    done
+    echo "$thisNode"
+}
+
+checkIfBYOK() {
+    BYOK=true
+    if [[ -n ${K8S_HOME} ]] && [[ -d ${K8S_HOME} ]]; then
+        BYOK=false
+    fi
+
+    log "BYOK: $BYOK"
+    export BYOK
+}
+
+checkHelmCommand() {
+    log "Checking helm command..."
+    which helm >>$LOGFILE 2>&1
+}
+
+getNodeInfo() {
+    # BYOK: bastion node ip address On-premise: name from k8s medadata
+    NODE_NAME=
+    # NODE_TYPE: 1.BASTION 2.MASTER 3.WORKER
+    NODE_TYPE=
+
+    if [[ $BYOK == "true" ]]; then
+        #byok
+        LOCAL_IP=$(ip route get 8.8.8.8 | sed 's/^.*src \([^ ]*\).*$/\1/;q')
+        NODE_NAME=$LOCAL_IP
+        NODE_TYPE=BASTION
+    else
+        #on-premise
+        local nodesInfo
+        nodesInfo=$(kubectl get nodes -o json 2>>$LOGFILE)
+        if [[ $? -ne 0 ]]; then
+            log "Fatal: Your K8S cluster seems not working fine, please run \"kubectl get nodes\" for more details."
+            exit 1
+        fi
+        All_NODES=$(echo $nodesInfo | jq -r '.items[].metadata.name' | xargs)
+        MASTER_NODES=($(echo $nodesInfo | jq -r '.items[]|select(.metadata.labels| has("node-role.kubernetes.io/control-plane")==true).metadata.name' | xargs))
+        NODE_NAME=$(getThisNode "${All_NODES}")
+        NODE_TYPE=WORKER
+        for node in ${MASTER_NODES[@]}; do
+            if [[ "${node}" == "${NODE_NAME}" ]]; then
+                NODE_TYPE=MASTER
+            fi
+        done
+    fi
+
+    export NODE_NAME
+    export NODE_TYPE
+}
+
+function collectK8sInfo() {
+    log "executing: $SCRIPTLOCATION/support-dump-kube-info -d $SUPPORT_DUMP_DIR -l $LOGFILE  -P $PRODUCT"
+    #as getopts not properly handle options, in case of "-u -p", getopts treats -p as the value of "-u"
+    if [ -z "$USERNAME" ]; then
+        "$SCRIPTLOCATION/support-dump-kube-info" -d "$SUPPORT_DUMP_DIR" -l "$LOGFILE" -P "$PRODUCT"
+    else
+        "$SCRIPTLOCATION/support-dump-kube-info" -d "$SUPPORT_DUMP_DIR" -l "$LOGFILE" -P "$PRODUCT" -u "$USERNAME" -p "$PASSWORD"
+    fi
+    unset PASSWORD
+}
+
+function collectVoLInfo() {
+    log "executing: $SCRIPTLOCATION/support-dump-volume-info -d $SUPPORT_DUMP_DIR -l $LOGFILE  -P $PRODUCT"
+    "$SCRIPTLOCATION/support-dump-volume-info" -d "$SUPPORT_DUMP_DIR" -l "$LOGFILE" -P "$PRODUCT"
+}
+
+function collectHelmInfo() {
+    checkHelmCommand
+    if [[ $? == 0 ]]; then
+        log "executing: $SCRIPTLOCATION/support-dump-helm-info -d $SUPPORT_DUMP_DIR -l $LOGFILE  -P $PRODUCT"
+        "$SCRIPTLOCATION/support-dump-helm-info" -d "$SUPPORT_DUMP_DIR" -l "$LOGFILE" -P "$PRODUCT"
+    fi
+}
+
+# Creates the support dump
+function createDump() {
+    echo
+    echo "##############################################"
+    echo " $(echo $PRODUCT | sed 's/_/ /g') - Support Data Export"
+    echo
+    echo "  Date:         $(date +"%F %T")"
+
+    # Default: $CDF_HOME/tools/support-tool/dmp/dump
+    SUPPORT_DUMP_DIR=$SUPPORT_DUMP_BASE/dump
+    # list of files to be collected with product name
+    TEMPLIST=$SUPPORT_DUMP_BASE"/"$TEMPLISTFILE
+    # list of files to exclude
+    EXCLUDELIST=$SUPPORT_DUMP_BASE"/"$EXCLUDELISTFILENAME
+
+    #before creating zip file create directory where we will place zip
+    if [ -d $SUPPORT_DUMP_BASE ]; then
+        log "Directory found, will use this to place zip files."
+    else
+        log "directory doesnot exist: $SUPPORT_DUMP_BASE, creating it."
+        /bin/mkdir -pv $SUPPORT_DUMP_BASE >>$LOGFILE 2>&1
+        if [ $? -eq 0 ]; then
+            log "directory created successfully."
+        else
+            logExit "Error occurred during creating directory for keeping support dumps. $SUPPORT_DUMP_BASE" 101
+        fi
+    fi
+
+    # clear support dump base directory
+    /bin/rm -f "$TEMPLIST" >>$LOGFILE 2>&1
+    /bin/rm -f "$EXCLUDELIST" >>$LOGFILE 2>&1
+    /bin/rm -rf "$SUPPORT_DUMP_DIR" >>$LOGFILE 2>&1
+
+    createDir "$SUPPORT_DUMP_DIR"
+
+    # move temporary log file to new location
+    /bin/mv -f "$LOGFILE" "$SUPPORT_DUMP_DIR/$LOGFILENAME"
+    LOGFILE="$SUPPORT_DUMP_DIR/$LOGFILENAME"
+
+    # Collect kubernetes information
+    collectK8sInfo
+    # Collect volume information
+    collectVoLInfo
+    # Collect helm infomation
+    collectHelmInfo
+
+    log "checking TEMPLIST: $TEMPLIST"
+    if [ -f "$TEMPLIST" ] && [ -s "$TEMPLIST" ]; then
+        logExit "Support dump download pending" 102
+    fi
+
+    log "recreating TEMPLIST: $TEMPLIST"
+    /bin/rm -f "$TEMPLIST"
+    /bin/touch "$TEMPLIST"
+
+    if [ -d $CONFIGLOCATION ]; then
+        log "recreating EXCLUDELIST: $EXCLUDELIST"
+        /bin/rm -f "$EXCLUDELIST"
+        /bin/touch "$EXCLUDELIST"
+
+        # get the list of config files from /ci/etc/supportdump/*.config
+        # and run support-dump-make-list script for all those scripts
+        for i in ${CONFIGLOCATION}/*.config; do
+            "$SCRIPTLOCATION/support-dump-make-list" -c $i -d "$SUPPORT_DUMP_DIR" -t "$TEMPLIST" -l "$LOGFILE" -s "false" -P "$PRODUCT"
+        done
+    else
+        logExit "$CONFIGLOCATION: does not exist. will return now." 103
+    fi
+
+    #Collect all the files and folders listed in $TEMPLIST
+    log "executing: ""$SCRIPTLOCATION/support-dump-collect-files" -t "$TEMPLIST" -e "$EXCLUDELIST" -d "$SUPPORT_DUMP_DIR" -l "$LOGFILE"
+    "$SCRIPTLOCATION/support-dump-collect-files" -t "$TEMPLIST" -e "$EXCLUDELIST" -d "$SUPPORT_DUMP_DIR" -l "$LOGFILE"
+
+    # creating zip now
+    if [ -z "$NOENCRYPTOUTPUT" ]; then
+        local suffix="aes"
+        local package="$SUPPORT_DUMP_BASE/$(basename $SUPPORTDUMPNAME).$suffix"
+        local uncompressPrompt="  dd if=$package |openssl aes-256-cbc -md sha1 -d -k <your_password>|tar zxf -"
+    else
+        local suffix="tgz"
+        local package="$SUPPORT_DUMP_BASE/$(basename $SUPPORTDUMPNAME).$suffix"
+        local uncompressPrompt="  tar -zxf $package"
+    fi
+    log "creating zip: $(basename $SUPPORTDUMPNAME).$suffix"
+    echo -n "Packing dump files ................ "
+    zipDir $package >>$LOGFILE 2>&1
+    echo "package file is $package."
+    echo
+    echo "Please use below command to uncompress the package file:"
+    echo "    $uncompressPrompt"
+
+    mv -f $LOGFILE $LOGFILES
+
+    # remove /dump dirctory
+    /bin/rm -rf "$SUPPORT_DUMP_DIR"
+    /bin/rm -f "$EXCLUDELIST"
+}
+
+######################################################################
+# INIT
+######################################################################
+init() {
+    checkIfBYOK
+    getNodeInfo
+}
+
+######################################################################
+# MAIN PROGRAM
+######################################################################
+main() {
+    # parse command line arguments and assign to appropriate variables
+    while [ -n "$1" ]; do
+        case $1 in
+        -c)
+            SUPPORTDUMPNAME=$2
+            log "SUPPORTDUMPNAME: ${SUPPORTDUMPNAME}"
+            shift 2
+            ;;
+        --no-encrypt-output)
+            NOENCRYPTOUTPUT="true"
+            log "NOENCRYPTOUTPUT : $NOENCRYPTOUTPUT"
+            shift
+            ;;
+        -y)
+            CONFIRMED="true"
+            log "CONFIRMED $CONFIRMED"
+            shift
+            ;;
+        -u)
+            USERNAME="$2"
+            log "Username is: $USERNAME"
+            shift 2
+            ;;
+        -p)
+            PASSWORD="$2"
+            log "Password is set!"
+            shift 2
+            ;;
+        -P)
+            P_PASSWORD="$2"
+            log "AES package password is set!"
+            shift 2
+            ;;
+        -h)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Illegal option: ${@}"
+            usage
+            exit 1
+            ;;
+        esac
+    done
+
+    SUPPORT_DUMP_BASE=$(
+        mkdir -p $(dirname "$SUPPORTDUMPNAME")
+        cd $(dirname "$SUPPORTDUMPNAME")
+        pwd
+    )
+
+    local exist_mng_portal=$(kubectl get deploy itom-mng-portal --namespace=$CDF_NAMESPACE --no-headers 2>/dev/null | awk '{print $1}')
+
+    if [ "$NOENCRYPTOUTPUT" = "true" -a -z "$CONFIRMED" ]; then
+        echo -e "By selecting the disable output file encryption option, you are disabling\n or bypassing security features, thereby exposing the system to increased\n security risks. By using this option, you understand and agree to assume\n all associated risks and hold OpenText harmless for the same."
+        read -p "Please type 'yes' to continue without encryption or 'no' if you want to stop: " confirm
+        echo
+        if [ "$(echo $confirm | tr [:upper:] [:lower:])" != "yes" ]; then
+            echo "Support dump will not performed." && exit 0
+        fi
+    fi
+
+    if [ -n "$exist_mng_portal" ]; then
+        if [ -z "$USERNAME" ]; then
+            read -p "Management Portal user: " USERNAME
+            read -s -p "Password: " PASSWORD
+            echo
+        elif [ -z "$PASSWORD" ]; then
+            read -p "Management Portal user($USERNAME): " new_user
+            USERNAME=${new_user:-${USERNAME}}
+            read -s -p "Password: " PASSWORD
+            echo
+        fi
+    fi
+
+    if [ -z "$NOENCRYPTOUTPUT" ]; then # not set --no-encrypt-output, need to encrypt output
+        if [ -z "$P_PASSWORD" ]; then
+            while [ 1 ]; do
+                read -s -p "Package password: " p_pass1
+                echo
+                if [ ! -z $p_pass1 ]; then
+                    read -s -p "Retype package password: " p_pass2
+                    echo
+                    if [ "$p_pass1" = "$p_pass2" ]; then
+                        P_PASSWORD=$p_pass1
+                        break
+                    else
+                        echo "Sorry, passwords do not match!"
+                    fi
+                else
+                    echo "Package password cannot be empty"
+                fi
+            done
+            echo
+        fi
+    fi
+
+    log "Start data dumping..."
+    createDump
+
+    echo
+}
+
+init
+# call the main
+main $@

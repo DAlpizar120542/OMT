@@ -1,0 +1,180 @@
+#!/bin/bash
+# Copyright 2017 - 2024 Open Text.
+#
+# The only warranties for products and services of Open Text and its affiliates and licensors ("Open Text")
+# are as may be set forth in the express warranty statements accompanying such products and services.
+# Nothing herein should be construed as constituting an additional warranty. Open Text shall not be liable
+# for technical or editorial errors or omissions contained herein. The information contained herein is subject
+# to change without notice.
+#
+# Except as specifically indicated otherwise, this document contains confidential information and a valid
+# license is required for possession, use or copying. If this work is provided to the U.S. Government,
+# consistent with FAR 12.211 and 12.212, Commercial Computer Software, Computer Software
+# Documentation, and Technical Data for Commercial Items are licensed to the U.S. Government under
+# vendor's standard commercial license.
+
+#see feature: OCTFT19S1761772
+if [[ "bash" != "$(readlink /proc/$$/exe | xargs basename)" ]]; then
+    echo "Error: only bash support, current shell: $(readlink /proc/$$/exe)"
+    exit 1
+fi
+set +o posix
+
+source /etc/profile
+
+getRfcTime() {
+    local fmt=$1
+    date --rfc-3339=${fmt} | sed 's/ /T/'
+}
+
+# it logs text to logfile
+log() {
+    local logTimeFmt=$(getRfcTime 'ns')
+    echo -e "$logTimeFmt DEBUG $*" >>$LOGFILE 2>&1
+}
+
+# it logs text to logfile and exits to program by returning exit status 1
+logExit() {
+    local logTimeFmt=$(getRfcTime 'ns')
+    echo -e "$logTimeFmt ERROR $*" >>$LOGFILE 2>&1
+    exit $2
+}
+
+setDirs() {
+    VOLUME_DUMP_DIR=$SUPPORT_DUMP_DIR/$PRODUCT
+
+    if [ -z "$SUPPORT_DUMP_DIR" ]; then
+        echo Not define support dump dir.
+        exit 1
+    fi
+
+    GLOBAL_VOLUME_DIR=$VOLUME_DUMP_DIR/global/volume
+
+    if [ -d $GLOBAL_VOLUME_DIR ]; then
+        echo Clean volume dump dir ...
+        rm -rf $GLOBAL_VOLUME_DIR/*
+    fi
+
+    mkdir -p $GLOBAL_VOLUME_DIR
+}
+
+execCMD() {
+    local cmd=$1
+    local logFile=$2
+
+    echo "============== Command Start ===============" >>$logFile
+    echo "CMD:   $cmd" >>$logFile
+    echo "DATE:  $(date +%c)" >>$logFile
+    echo "-------------------------------" >>$logFile
+    eval $cmd >>$logFile 2>&1
+    echo "=============== Command End ================" >>$logFile
+    echo >>$logFile
+}
+
+showCMD() {
+    local cmd=$1
+    local title=$2
+    local exported_file=$(basename $3)
+    local comments=$4
+
+    echo
+    echo "----------------------------------------------"
+    echo " $title"
+    echo "  Export:   $exported_file"
+    if [ ! -z "$comments" ]; then
+        echo "  Comments: $comments"
+    fi
+    echo "----------------------------------------------"
+    if [ "$title" = "Repo" ]; then
+        local repoOutput=$($cmd 2>&1)
+        # Check if certain string exists in output.
+        if (echo $repoOutput | grep -Eq "^Error.+no.+show"); then
+            echo "No repositories to show."
+        else
+            echo $repoOutput
+        fi
+    else
+        eval $cmd
+    fi
+    echo
+}
+
+getVolumeSummaryInfo() {
+    SUMMARY_VOLUME_OUT=$GLOBAL_VOLUME_DIR/volume_summary.out
+    >$SUMMARY_VOLUME_OUT
+    local nsList=
+    local pvcList=
+    local podList=
+    local podName=
+    local containerName=
+    local volumeName= nfsType
+    nsList=$(kubectl get ns --no-headers 2>/dev/null | awk '{print $1}')
+    for ns in ${nsList}; do
+        pvcList=$(kubectl get pvc -n ${ns} --no-headers 2>/dev/null | awk '{print $1}')
+        if [[ $(echo ${pvcList} | wc -w) -eq 0 ]]; then
+            continue
+        fi
+        podList=$(kubectl get pods -n ${ns} -o json 2>/dev/null)
+        for pvc in ${pvcList}; do
+            podName=$(echo $podList | jq -r '.items[]|select(.spec.volumes[]?.persistentVolumeClaim?.claimName?=="'${pvc}'")|select(.status.phase=="Running")|.metadata.name' | xargs | awk '{print $1}')
+            if [[ $(echo ${podName} | wc -w) -eq 0 ]]; then
+                continue
+            fi
+            volumeName=$(echo $podList | jq -r '.items[]|select(.metadata.name=="'${podName}'")|.spec.volumes[]|select(.persistentVolumeClaim.claimName=="'${pvc}'")|.name')
+            containerName=$(echo $podList | jq -r '.items[]|select(.metadata.name=="'${podName}'")|.spec.containers[]|select(.volumeMounts[].name=="'${volumeName}'")|.name')
+            if [ -z "$containerName" ]; then
+                log "pvc is not used by any container, it may be used in init container,skip!"
+                continue
+            fi
+            #echo "kubectl exec -it ${podName} -n ${ns} -c ${containerName} -- df -Th --type=nfs4"
+            #kubectl exec -it ${podName} -n ${ns} -c ${containerName} -- df -Th --type=nfs4
+            nfsType=$(kubectl exec ${podName} -n ${ns} -c $containerName -- df -Th | grep -m1 "nfs" | awk '{print $2}')
+            if [ $? -ne 0 ] || [ -z "$nfsType" ]; then
+                log "no nfs filesystem in pod, skip"
+                continue
+            fi
+            execCMD "kubectl exec ${podName} -n ${ns} -c $containerName -- df -Th --type=$nfsType" $SUMMARY_VOLUME_OUT
+            showCMD "kubectl exec ${podName} -n ${ns} -c $containerName -- df -Th --type=$nfsType" "Volume" $SUMMARY_VOLUME_OUT "VolumeClaim=${pvc} NameSpace=${ns}"
+        done
+    done
+}
+
+# display's usage of the script, we dont support this script to be run thru command line
+usage() {
+    echo -e "Usage: \n${@}can only be run through support-dump script."
+    exit 1
+}
+
+main() {
+    # Reading command line arguments and validating and assigning.
+    while getopts "d:l:P:" opt; do
+        case $opt in
+        d)
+            SUPPORT_DUMP_DIR=$OPTARG
+            ;;
+        l)
+            LOGFILE=$OPTARG
+            log "logfiles assignment is already done."
+            ;;
+        P)
+            PRODUCT=$OPTARG
+            log "Product Name: $PRODUCT"
+            ;;
+        *)
+            echo "invalid option: ${@}"
+            usage
+            ;;
+        esac
+    done
+
+    if [ -z "$SUPPORT_DUMP_DIR" ] || [ -z "$LOGFILE" ]; then
+        usage
+    fi
+
+    log "SUPPORT_DUMP_DIR: $SUPPORT_DUMP_DIR"
+    setDirs
+    getVolumeSummaryInfo
+}
+
+# call the main
+main $@

@@ -1,0 +1,1009 @@
+#!/bin/bash
+# Copyright 2017 - 2024 Open Text.
+#
+# The only warranties for products and services of Open Text and its affiliates and licensors ("Open Text")
+# are as may be set forth in the express warranty statements accompanying such products and services.
+# Nothing herein should be construed as constituting an additional warranty. Open Text shall not be liable
+# for technical or editorial errors or omissions contained herein. The information contained herein is subject
+# to change without notice.
+#
+# Except as specifically indicated otherwise, this document contains confidential information and a valid
+# license is required for possession, use or copying. If this work is provided to the U.S. Government,
+# consistent with FAR 12.211 and 12.212, Commercial Computer Software, Computer Software
+# Documentation, and Technical Data for Commercial Items are licensed to the U.S. Government under
+# vendor's standard commercial license.
+
+#see feature: OCTFT19S1761772
+if [[ "bash" != "$(readlink /proc/$$/exe | xargs basename)" ]]; then
+    echo "Error: only bash support, current shell: $(readlink /proc/$$/exe)"
+    exit 1
+fi
+set +o posix
+
+if [[ -f "/etc/profile.d/itom-cdf.sh" ]]; then
+    source "/etc/profile.d/itom-cdf.sh"
+fi
+if [ -z "$CDF_NAMESPACE" ]; then
+    echo "Error: CDF namespace not found!"
+    exit 1
+fi
+
+SUPPORT_DUMP_DIR=""
+LOGFILE=""
+
+CONTAINERD_VERSION=
+K8S_S_VERSION=
+K8S_C_VERSION=
+
+USERNAME=
+PASSWORD=
+TENANT=provider
+CTR_PARAM=" -n k8s.io "
+MAX_RETRY=5
+
+# This is for debugging purpose, set it always off once debugging is done.
+_DEBUG="off"
+
+getRfcTime() {
+    local fmt=$1
+    date --rfc-3339=${fmt} | sed 's/ /T/'
+}
+
+# it logs text to logfile
+log() {
+    local logTimeFmt=$(getRfcTime 'ns')
+    echo -e "$logTimeFmt DEBUG $*" >>$LOGFILE 2>&1
+}
+
+# it logs text to logfile and exits to program by returning exit status 1
+logExit() {
+    local logTimeFmt=$(getRfcTime 'ns')
+    echo -e "$logTimeFmt ERROR $*" >>$LOGFILE 2>&1
+    exit $2
+}
+
+function DEBUG() {
+    if [ "$_DEBUG" == "on" ]; then
+        echo "$*"
+    fi
+}
+
+setDirs() {
+    local support_dum_dir=$1
+    KUBE_DUMP_DIR=$support_dum_dir/$PRODUCT
+
+    if [ -z "$support_dum_dir" ]; then
+        echo Not define support dump dir.
+        exit 1
+    fi
+
+    if [ -d $KUBE_DUMP_DIR ]; then
+        echo Clean Kubernetes dump dir ...
+        rm -rf $KUBE_DUMP_DIR/*
+    fi
+
+    NODE_DIR=$KUBE_DUMP_DIR/${NODE_NAME}-${NODE_TYPE}
+    OS_DIR=$NODE_DIR/os
+    WORKLOAD_DIR=$NODE_DIR/containerd/workload
+    GLOBAL_DIR=$KUBE_DUMP_DIR/global
+    GLOBAL_KUBE_DIR=$GLOBAL_DIR/kubernetes
+    GLOBAL_PLAT_DIR=$GLOBAL_DIR/platform
+    GLOBAL_DEPLOY_DIR=$GLOBAL_DIR/deployment
+
+    mkdir -p $OS_DIR
+    mkdir -p $WORKLOAD_DIR
+    mkdir -p $GLOBAL_KUBE_DIR
+    mkdir -p $GLOBAL_PLAT_DIR
+    mkdir -p $GLOBAL_DEPLOY_DIR
+}
+
+execCMD() {
+    local cmd=$1
+    local logFile=$2
+
+    echo "============== Command Start ===============" >>$logFile
+    echo "CMD:   $cmd" >>$logFile
+    echo "DATE:  $(date +%c)" >>$logFile
+    echo "-------------------------------" >>$logFile
+    eval $cmd >>$logFile 2>&1
+    echo "=============== Command End ================" >>$logFile
+    echo >>$logFile
+}
+
+showCMD() {
+    local cmd=$1
+    local title=$2
+    local exported_file=$(basename $3)
+    local comments=$4
+
+    echo
+    echo "----------------------------------------------"
+    echo " $title"
+    echo "  Export:   $exported_file"
+    if [ ! -z "$comments" ]; then
+        echo "  Comments: $comments"
+    fi
+    echo "----------------------------------------------"
+    eval $cmd
+    echo
+}
+
+getKubeInfo() {
+    getContainerdVersion
+    local cri_ret=$?
+    if [ $cri_ret != 0 ]; then
+        log "Fail to get Containerd version. Please check Containerd installed correctly."
+    fi
+
+    getK8SVersion
+    local k8s_ret=$?
+    if [ $k8s_ret != 0 ]; then
+        log "Fail to get K8S version. Please check Kubernetes installed correctly."
+    fi
+
+    local ret_code="$cri_ret$k8s_ret"
+    local msg=""
+    [[ $ret_code == "10" ]] && msg = "Containerd"
+    [[ $ret_code == "01" ]] && msg = "Kubernetes"
+    [[ $ret_code == "11" ]] && msg = "Containerd&Kubernetes"
+
+    if [[ $msg != "" ]]; then
+        log "$msg not installed!"
+        echo "################################################"
+        echo
+        echo "$msg not installed!"
+
+        exit 1
+    fi
+}
+
+printKubeInfo() {
+    echo "  Current node: $NODE_NAME"
+    echo "  Node type:    $NODE_TYPE"
+    [[ $CONTAINERD_VERSION != "" ]] &&
+        echo "  Containerd:   $CONTAINERD_VERSION"
+    echo "  Kubernetes:   server-$K8S_S_VERSION client-$K8S_C_VERSION"
+    echo "##############################################"
+    echo
+}
+
+getKubeSummaryInfo() {
+    SUMMARY_KUBE_OUT=$GLOBAL_KUBE_DIR/kube_summary.out
+
+    >$SUMMARY_KUBE_OUT
+
+    # echo "Kubernetes summary info ... exported to $(basename $SUMMARY_KUBE_OUT)"
+
+    execCMD "kubectl get namespaces" $SUMMARY_KUBE_OUT
+
+    execCMD "kubectl get pv" $SUMMARY_KUBE_OUT
+
+    execCMD "kubectl get pvc --all-namespaces" $SUMMARY_KUBE_OUT
+
+    execCMD "kubectl get nodes" $SUMMARY_KUBE_OUT
+    showCMD "kubectl get nodes" "Nodes" $SUMMARY_KUBE_OUT
+
+    execCMD "kubectl get deployments --all-namespaces" $SUMMARY_KUBE_OUT
+
+    execCMD "kubectl get services --all-namespaces" $SUMMARY_KUBE_OUT
+
+    execCMD "kubectl get pods --all-namespaces -o wide" $SUMMARY_KUBE_OUT
+    showCMD "kubectl get pods --all-namespaces -o wide" "Pods" $SUMMARY_KUBE_OUT
+
+    execCMD "kubectl get ingress --all-namespaces" $SUMMARY_KUBE_OUT
+
+    pods=()
+
+    local n=0
+    for p in $(kubectl get pods --all-namespaces -o wide | awk '{print $1"#"$2"#"$8}'); do
+        ((n++))
+        if [[ $n -eq 1 ]]; then
+            continue
+        fi
+
+        pods+=("$p")
+    done
+}
+
+getK8sContainers() {
+    CONTAINERS_OUT=$WORKLOAD_DIR/containers.out
+    containers_inspect=()
+    b_containers=()
+
+    >$CONTAINERS_OUT
+
+    execCMD "ctr ${CTR_PARAM} container ls" $CONTAINERS_OUT
+    showCMD "ctr ${CTR_PARAM} container ls" "Containers in k8s.io namespace" $CONTAINERS_OUT "on $NODE_TYPE node $NODE_NAME"
+    local n=0
+    for c in $(eval "ctr ${CTR_PARAM} container ls -q"); do
+        ((n++))
+        if [[ $n -eq 1 ]]; then
+            continue
+        fi
+
+        containers_inspect+=("$c")
+    done
+
+}
+
+getContainerImages() {
+    IMAGES_OUT=$WORKLOAD_DIR/containerd_images.out
+
+    >$IMAGES_OUT
+
+    echo "Collecting containerd images information"
+    execCMD "ctr ${CTR_PARAM} images ls" $IMAGES_OUT
+}
+
+getContainerdConfig() {
+    DINFO_OUT=$WORKLOAD_DIR/containerd_config.out
+
+    >$DINFO_OUT
+
+    local cfg=$(systemctl show containerd | grep -w ExecStart | awk -F';' '{for (i = 1; i <= NF; i++) {printf "%s \n", $i}}' | grep "argv")
+    cfg=${cfg##*=}
+
+    echo "Collecting containerd configuration information"
+    execCMD "containerd -c $cfg config dump" $DINFO_OUT
+}
+
+getPodImages() {
+    POD_IMAGES_OUT=$GLOBAL_PLAT_DIR/images_by_pod.out
+    pod_images=()
+
+    >$POD_IMAGES_OUT
+
+    execCMD "kubectl get pods --all-namespaces -o=jsonpath='{range .items[*]}{\"\n\"}{.metadata.name}{\":\n\"}{range .spec.containers[*]}{\"\t\"}[{.name}] {.image}{\"\n\"}{end}{end}'" \
+        $POD_IMAGES_OUT
+
+    showCMD "kubectl get pods --all-namespaces -o=custom-columns=POD:.metadata.name,NODE:.spec.nodeName,IMAGES:.spec.containers[*].image" "Pod Images" $POD_IMAGES_OUT
+    echo
+
+    local count=${#pods[@]}
+
+    for ((i = 0; i < count; i++)); do
+        local pod_ns=$(echo ${pods[$i]} | awk -F"#" '{print $1}')
+        local pod_name=$(echo ${pods[$i]} | awk -F"#" '{print $2}')
+        local pod_node=$(echo ${pods[$i]} | awk -F"#" '{print $3}')
+
+        for pod_image in $(kubectl get pods $pod_name --namespace=$pod_ns -o=jsonpath='{range .status.containerStatuses[*]}{.name}#{.image}#{.containerID}{"\n"}{end}'); do
+            pod_images+=("${pods[$i]}#$pod_image")
+        done
+    done
+
+}
+
+getPodContainers() {
+    POD_CONTAINERS_OUT=$GLOBAL_PLAT_DIR/containers_by_pod.out
+    pod_images=()
+    local container_tmp=${TMP_FOLDER}/pod_containers.tmp
+
+    >$POD_CONTAINERS_OUT
+    echo "NAMESPACE#POD#NODE#IMAGE#CONTAINER#CONTAINER_ID" >$container_tmp
+
+    local count=${#pods[@]}
+
+    for ((i = 0; i < count; i++)); do
+        local pod_ns=$(echo ${pods[$i]} | awk -F"#" '{print $1}')
+        local pod_name=$(echo ${pods[$i]} | awk -F"#" '{print $2}')
+        local pod_node=$(echo ${pods[$i]} | awk -F"#" '{print $3}')
+
+        for pod_image in $(kubectl get pods $pod_name --namespace=$pod_ns -o=jsonpath='{range .status.containerStatuses[*]}{.name}#{.image}#{.containerID}{"\n"}{end}'); do
+            pod_images+=("${pods[$i]}#$pod_image")
+        done
+    done
+
+    count=${#pod_images[@]}
+
+    for ((i = 0; i < count; i++)); do
+        local pod_ns=$(echo ${pod_images[$i]} | awk -F"#" '{print $1}')
+        local pod_name=$(echo ${pod_images[$i]} | awk -F"#" '{print $2}')
+        local pod_node=$(echo ${pod_images[$i]} | awk -F"#" '{print $3}')
+        local pod_container=$(echo ${pod_images[$i]} | awk -F"#" '{print $4}')
+        local pod_image=$(echo ${pod_images[$i]} | awk -F"#" '{print $5}')
+        local container_id=$(echo ${pod_images[$i]} | awk -F"#" '{print $6}' | awk -F"//" '{printf("%.12s",$2)}')
+
+        echo "$pod_ns#$pod_name#$pod_node#$pod_image#$pod_container#$container_id" >>$container_tmp
+    done
+
+    column -t -s '#' $container_tmp >>$POD_CONTAINERS_OUT 2>&1
+    showCMD "column -t -s '#' $container_tmp" "POD Containers" $POD_CONTAINERS_OUT
+
+    rm -f $container_tmp
+}
+
+getJournalctl() {
+    CONTAINERD_J_OUT=$WORKLOAD_DIR/journalctl_containerd.out
+
+    >$CONTAINERD_J_OUT
+
+    execCMD "journalctl -u containerd" $CONTAINERD_J_OUT
+}
+
+getInspect() {
+    INSPECT_OUT=$WORKLOAD_DIR/containerd_inspect.out
+
+    >$INSPECT_OUT
+
+    echo -n "Inspect containers .................... "
+
+    local count=${#containers_inspect[@]}
+    for ((i = 0; i < count; i++)); do
+        local container=${containers_inspect[$i]}
+
+        execCMD "ctr ${CTR_PARAM} container info $container" $INSPECT_OUT
+    done
+
+    echo "exported"
+}
+
+getClusterInfo() {
+    CLUSTER_INFO_DIR=$GLOBAL_KUBE_DIR/cluster_info
+    CLUSTER_INFO_OUT=$CLUSTER_INFO_DIR/cluster_info.out
+
+    mkdir -p $CLUSTER_INFO_DIR
+    >$CLUSTER_INFO_OUT
+
+    echo -n "cluster-info dump ..................... "
+    execCMD "kubectl cluster-info dump --all-namespaces --output-directory=$CLUSTER_INFO_DIR" $CLUSTER_INFO_OUT
+    echo "exported"
+}
+
+getDescribe() {
+    DESCRIBE_OUT=$GLOBAL_KUBE_DIR/kube_describe.out
+
+    >$DESCRIBE_OUT
+
+    local count=${#pods[@]}
+
+    echo -n "describe pods ......................... "
+    for ((i = 0; i < count; i++)); do
+        local pod_ns=$(echo ${pods[$i]} | awk -F"#" '{print $1}')
+        local pod_name=$(echo ${pods[$i]} | awk -F"#" '{print $2}')
+
+        execCMD "kubectl describe pod $pod_name --namespace=$pod_ns" $DESCRIBE_OUT
+    done
+
+    echo "exported"
+
+}
+
+getSuiteDB() {
+    local suitedb_cm="cdfapiserver-database" suitedb_cm_json is_embeded pods
+    suitedb_cm_json=$(kubectl get cm $suitedb_cm -n $CDF_NAMESPACE -o json 2>>/dev/null)
+    if [ $? -ne 0 ]; then
+        log "cdfapiserver-database configmap not found, skip!"
+        return 0
+    fi
+    is_embeded=$(echo $suitedb_cm_json | jq -r ".data.EMBEDDED_DB?")
+    if [ "$is_embeded" == "false" ]; then
+        log "Using external cdfapiserver database!"
+        return 0
+    fi
+    pods=($(kubectl get pod --all-namespaces | grep suite-db | awk '{print $1 ":" $2}' | xargs 2>>$LOGFILE))
+    if [ -z "$pods" ] || [ ${#pods[@]} -eq 0 ]; then
+        log "Can't find cdfapiserver database pod!"
+        return 1
+    fi
+
+    for pod in ${pods[@]}; do
+        local pod_ns=${pod%%:*}
+        local pod_name=${pod#*:}
+        local dump_file=${pod_ns}_suite-db_pgdump.tar
+
+        echo -n "cdfapiserver database .......................... "
+        log "Dump cdfapiserver database from ($pod_ns)$pod_name ..."
+        local dbpass=$(kubectl exec $pod_name -n $pod_ns -c postgresql -- get_secret suitedb_user_password 2>&1)
+        if [[ $? != 0 ]]; then
+            log "Dump cdfapiserver database failed: password error!"
+            echo "dump data of $pod_name failed: password error!"
+            return 1
+        else
+            export pgpass=${dbpass#*PASS=}
+            kubectl exec $pod_name -n $pod_ns -c postgresql -- rm -f /var/pgdata/$dump_file >>$LOGFILE 2>&1
+            kubectl exec $pod_name -n $pod_ns -c postgresql -- bash -c "export PGPASSWORD=${pgpass} && pg_dump -h 127.0.0.1 -U postgres suitedb -F t -f /var/pgdata/$dump_file" >>$LOGFILE 2>&1
+            if [ $? != 0 ]; then
+                log "Dump cdfapiserver database failed!"
+                echo "dump data of $pod_name failed!"
+                return 1
+            fi
+        fi
+        kubectl cp ${pod_ns}/${pod_name}:/var/pgdata/${dump_file} -c postgresql ${GLOBAL_DEPLOY_DIR}/${dump_file} >>$LOGFILE
+        if [ $? != 0 ]; then
+            log "Get cdfapiserver database dump file from pod $pod_ns:$pod_name failed!"
+            echo "get dump file from $pod_ns:$pod_name failed!"
+            return 1
+        fi
+
+        log "Get cdfapiserver database dump file from pod succeed!"
+        echo "dump file of $pod_ns:$pod_name exported to $dump_file"
+    done
+}
+
+getSuiteJSON() {
+
+    local capabilities=$(kubectl get cm cdf -n $CDF_NAMESPACE -o json 2>/dev/null | jq -r '.data."CAPABILITIES"')
+
+    #helm based cluster, no cdf-apiserver and portal will be installed, skip checking
+    if [[ "$capabilities" =~ "suiteDeploymentManagement=false" ]]; then
+        return 0
+    fi
+
+    SUITE_DATA_DIR=$GLOBAL_DEPLOY_DIR/suite_data
+
+    mkdir -p $SUITE_DATA_DIR
+
+    echo -n "Suite data ............................ "
+    log "Get suite data"
+
+    local pod=($(kubectl get pod -n $CDF_NAMESPACE | grep cdf-apiserver | awk '{print $1}')) #all metadatas are stored in core/cdf-apiserver
+    if [ -n "$pod" ] && [ ${#pod[@]} -gt 0 ]; then
+        kubectl cp ${CDF_NAMESPACE}/${pod[0]}:/apiserver/nfsCore/metadata -c cdf-apiserver $SUITE_DATA_DIR >>$LOGFILE
+        echo "exported"
+    else
+        log "Failed to get cdf-apiserver pod in $CDF_NAMESPACE namespace."
+        echo "Not get cdf-apiserver pod in $CDF_NAMESPACE namespace"
+    fi
+}
+
+getSuiteFeatures() {
+    local capabilities=$(kubectl get cm cdf -n $CDF_NAMESPACE -o json 2>/dev/null | jq -r '.data."CAPABILITIES"')
+
+    #helm based cluster, no cdf-apiserver and portal will be installed, skip checking
+    if [[ "$capabilities" =~ "suiteDeploymentManagement=false" ]]; then
+        return 0
+    fi
+
+    SUITE_FEATURES_OUT=$GLOBAL_DEPLOY_DIR/suite_features.out
+
+    >$SUITE_FEATURES_OUT
+
+    log "Get suite features ..."
+
+    suite_installer_host=$(kubectl get cm cdf --namespace=$CDF_NAMESPACE -o json 2>>$LOGFILE | jq -r '.data.EXTERNAL_ACCESS_HOST')
+
+    if [ -z "$suite_installer_host" ]; then
+        return 1
+    fi
+
+    suite_installer_port=$(kubectl get cm cdf --namespace=$CDF_NAMESPACE -o json 2>>$LOGFILE | jq -r '.data.INGRESS_SSL_PORT')
+
+    if [ -z "$suite_installer_port" ]; then
+        return 1
+    fi
+
+    BASE_URL="https://${suite_installer_host}:${suite_installer_port}"
+
+    local s_output=${TMP_FOLDER}/suites_out.tmp
+    local f_output=${TMP_FOLDER}/features_out.tmp
+
+    if [ -z "$USERNAME" ]; then
+        read -p "Management Portal user:" USERNAME
+        read -s -p "Password:" PASSWORD
+        echo
+    elif [ -z "$PASSWORD" ]; then
+        read -p "Management Portal user($USERNAME):" new_user
+        USERNAME=${new_user:-${USERNAME}}
+        read -s -p "Password:" PASSWORD
+        echo
+    fi
+
+    log "Username is: $USERNAME"
+
+    ca_crt=$(mktemp)
+    kubectl get cm public-ca-certificates -n "${CDF_NAMESPACE}" -o json | jq -r '.data["RE_ca.crt"]?' >"$ca_crt" 2>/dev/null
+
+    local user_json="{\"passwordCredentials\": {\"password\": \"$PASSWORD\",\"username\": \"$USERNAME\"},\"tenantName\": \"$TENANT\"}"
+    unset PASSWORD
+
+    local token=$(curl --tlsv1.2 --cacert $ca_crt --silent -H "Content-Type: application/json" -d "$user_json" ${BASE_URL}/suiteInstaller/urest/v1.1/tokens | jq ".token" 2>/dev/null | tr -d '"')
+    unset user_json
+
+    if [ -z "$token" ] || [ "$token" = "null" ]; then
+        echo "Fail to get token from $BASE_URL! Please check your management portal username/password."
+        return 1
+    fi
+
+    echo -n "SUITE#EDITION#SELECTED#FEATURE_SET#FEATURE" >$f_output
+    echo "SUITE#VERSION#NAMESPACE#DEPLOYMENT_STATUS#INSTALL_DATE#NFS_SERVER#NFS_OUTPUT_PATH" >$s_output
+
+    old_IFS=$IFS
+    IFS=$'\n'
+    for deployment in $(curl --tlsv1.2 --cacert $ca_crt --silent -H 'Accept: application/json' -H "X-AUTH-TOKEN: $token" \
+        "${BASE_URL}/suiteInstaller/urest/v1.1/deployment?deploymentStatus=SUITE_INSTALL&deploymentStatus=INSTALL_FINISHED&deploymentStatus=DELETED" |
+        jq ".[]|.deploymentInfo|[.deploymentUuid, .suite, .namespace, .version, .firstInstallDate, .deploymentStatus, .nfsIp, .nfsOutputPath]" |
+        xargs | sed "s/\[ //g" | sed "s/ \]$//g" | sed "s/ \] /\n/g"); do
+        IFS=$old_IFS
+
+        if [ -z "$deployment" ]; then
+            echo "No deployment was found!"
+            return 1
+        fi
+
+        local deploy_uuid=$(echo $deployment | awk -F', ' '{print $1}')
+        local deploy_suite=$(echo $deployment | awk -F', ' '{print $2}')
+        local deploy_ns=$(echo $deployment | awk -F', ' '{print $3}')
+        local deploy_ver=$(echo $deployment | awk -F', ' '{print $4}')
+        local deploy_date_s=$(echo $deployment | awk -F', ' '{print $5}')
+        if [ -n "$deploy_date_s" ] && [ "$deploy_date_s" != "null" ] && [[ "$deploy_date_s" -gt 0 ]]; then
+            deploy_date=$(date -d @$((deploy_date_s / 1000)) +"%F %T")
+        else
+            deploy_date="null"
+        fi
+        local deploy_status=$(echo $deployment | awk -F', ' '{print $6}')
+        local deploy_nfsip=$(echo $deployment | awk -F', ' '{print $7}')
+        local deploy_nfspath=$(echo $deployment | awk -F', ' '{print $8}')
+
+        if [ "$deploy_status" == "DELETED" ]; then
+            continue
+        fi
+
+        echo "$deploy_suite#$deploy_ver#$deploy_ns#$deploy_status#$deploy_date#$deploy_nfsip#$deploy_nfspath" >>$s_output
+
+        echo -ne "\n$deploy_suite" >>$f_output
+
+        local feature_json=$(curl --tlsv1.2 $security_opt --silent -H 'Accept: application/json' -H "X-AUTH-TOKEN: $token" \
+            "${BASE_URL}/suiteInstaller/urest/v1.1/deployment/$deploy_uuid/feature")
+
+        local e_count=0
+
+        local feature_sets=$(echo $feature_json | jq ".feature_sets")
+        local edtions=$(echo $feature_json | jq ".editions")
+        local edtion_num=$(echo $edtions | jq ".|length")
+        local i
+        if [ -n "$edtion_num" ]; then
+            for ((i = 0; i < $edtion_num; i++)); do
+                local edition_id=$(echo $edtions | jq -r ".[$i].id")
+                local edition_name=$(echo $edtions | jq -r ".[$i].name")
+                local edition_sel=$(echo $edtions | jq -r ".[$i].selected")
+                if [[ $i -eq 0 ]]; then
+                    echo -n "#$edition_name#$edition_sel" >>$f_output
+                else
+                    echo -ne "\n#$edition_name#$edition_sel" >>$f_output
+                fi
+                local j=0
+                if [ "$edition_sel" == "true" ]; then
+                    local has_feature_sets=($(echo $edtions | jq -r ".[$i].has_feature_sets[]|.id" | xargs))
+                    for fs in ${has_feature_sets[@]}; do
+                        local fs_name=$(echo $feature_sets | jq -r '.[]|select( .id == "'$fs'" ).name')
+                        local fs_desc=$(echo $feature_sets | jq -r '.[]|select( .id == "'$fs'" ).description')
+                        if [[ $j -eq 0 ]]; then
+                            echo -n "#$fs_name#$fs_desc" >>$f_output
+                        else
+                            echo -ne "\n###$fs_name#$fs_desc" >>$f_output
+                        fi
+                        ((j++))
+
+                    done
+                fi
+
+            done
+        else
+            echo -n "#null#null#null#null" >>$f_output
+        fi
+
+    done
+
+    execCMD "column -t -s '#' $s_output" $SUITE_FEATURES_OUT
+    showCMD "column -t -s '#' $s_output" "Suite Deployment" $SUITE_FEATURES_OUT
+
+    execCMD "column -t -s '#' $f_output" $SUITE_FEATURES_OUT
+    showCMD "column -t -s '#' $f_output" "Suite Features" $SUITE_FEATURES_OUT
+
+    echo
+
+    rm -f $ca_crt
+    rm -f $f_output
+    rm -f $s_output
+}
+
+getK8SVersion() {
+    kubectl version >/dev/null 2>&1
+    if [ $? != 0 ]; then
+        return 1
+    fi
+
+    K8S_C_VERSION=$(kubectl version --output=json | jq -r '.clientVersion.gitVersion')
+    K8S_S_VERSION=$(kubectl version --output=json | jq -r '.serverVersion.gitVersion')
+}
+
+getContainerdVersion() {
+    CONTAINERD_VERSION=
+    # No need for BYOK
+    if [[ $BYOK == "true" ]]; then
+        return 0
+    fi
+
+    containerd --version >/dev/null 2>&1
+    if [ $? != 0 ]; then
+        return 1
+    fi
+
+    CONTAINERD_VERSION=$(containerd --version | awk '{print $3}')
+}
+
+# display's usage of the script, we dont support this script to be run thru command line
+usage() {
+    echo -e "Usage: \n${@}can only be run through support-dump script."
+    exit 1
+}
+
+getAllPodLogs() {
+    echo -n "Get logs from all pods ................ "
+    log "Get logs from all pods ..."
+    basefolder="${GLOBAL_KUBE_DIR}/logs_all_pods"
+    mkdir -p $basefolder
+    nss=$(kubectl get ns)
+    for ns in $nss; do
+        pods=$(kubectl get pods -n $ns -o jsonpath='{.items[*].metadata.name}')
+        for pod in $pods; do
+            containers=$(kubectl get pods $pod -n $ns -o jsonpath='{.spec.initContainers[*].name}')
+            containers="$containers $(kubectl get pods $pod -n $ns -o jsonpath='{.spec.containers[*].name}')"
+            for cn in $containers; do
+                log "$ns $pod $cn"
+                kubectl logs $pod -n $ns -c $cn >$basefolder/${ns}_${pod}_${cn}.log 2>&1
+            done
+        done
+    done
+    echo "exported"
+}
+
+getKubeStatus() {
+    echo -n "Run kube-status.sh .................... "
+    log "Run kube-status.sh ..."
+    basefolder="${GLOBAL_KUBE_DIR}/kube-status"
+    mkdir -p $basefolder
+    $CDF_HOME/bin/kube-status.sh >>${basefolder}/console.out 2>&1
+    cp $CDF_HOME/log/kube-status/* $basefolder/
+    echo "exported"
+}
+
+getPodsWide() {
+    echo -n "Run get pods wide ..................... "
+    log "Run get pods wide ..."
+    basefolder="${GLOBAL_KUBE_DIR}/get-pods-wide"
+    mkdir -p $basefolder
+    kubectl get pods --all-namespaces -o wide >>${basefolder}/console.out 2>&1
+    echo "exported"
+}
+
+getPodsDescribe() {
+    echo -n "Get describe from all pods ............ "
+    log "Get describe from all pods ..."
+    basefolder="${GLOBAL_KUBE_DIR}/describe_all_pods"
+    mkdir -p $basefolder
+    nss=$(kubectl get ns)
+    for ns in $nss; do
+        pods=$(kubectl get pods -n $ns -o jsonpath='{.items[*].metadata.name}')
+        for pod in $pods; do
+            log "$ns $pod"
+            kubectl describe pods $pod -n $ns >$basefolder/${ns}_${pod}.describe
+        done
+    done
+    echo "exported"
+}
+
+checkRegistryPullsecret() {
+    local res=$(
+        which kubectl >/dev/null 2>&1
+        echo $?
+    )
+    if [ $res -ne 0 ]; then
+        return 1
+    else
+        REGISTRY_BASE=$(kubectl get cm cdf -n $CDF_NAMESPACE -o json 2>>$LOGFILE | jq -r '.data."SUITE_REGISTRY"')
+        if [ -z "$REGISTRY_BASE" ] || [[ "$REGISTRY_BASE" != "localhost:5000" ]]; then #external registry
+            return 2
+        fi
+        local data auth
+        data=$(kubectl get secret -n $CDF_NAMESPACE registrypullsecret -o json 2>/dev/null | jq -r '.data[".dockerconfigjson"]' 2>/dev/null | base64 -d 2>/dev/null)
+        local hosts=$(echo $data | jq -r ".auths" | jq -r "keys[]" | xargs)
+        for host in ${hosts}; do
+            if [[ "$host" =~ "$REGISTRY_BASE" ]]; then
+                auth=$(echo $data | jq -r '.auths["'${host}'"].auth' | base64 -d 2>>$LOGFILE)
+            fi
+        done
+
+        REG_USERNAME=${auth%%:*}
+        REG_PASSWORD=${auth#*:}
+        if [ "$REG_USERNAME" == "_json_key" ]; then
+            echo $REG_PASSWORD >${GLOBAL_KUBE_DIR}/key.json
+            KEY_FILE=${GLOBAL_KUBE_DIR}/key.json
+        fi
+
+        return 0
+    fi
+}
+
+contactRegistryByCurl() {
+    local result=125
+    local scheme="" token="" status_code="" curl_cmd="" http_resp=""
+    CURL_NOPROXY_OPT="--noproxy localhost"
+    CURL_SECURE_OPT="--cacert ${CDF_HOME}/ssl/ca.crt"
+    local version=$(curl --version | grep "curl" | cut -d ' ' -f 2)
+    version=$(echo $version | tr -d ".")
+    if [[ $version -ge 7470 ]]; then #Since 7.47.0, the curl tool enables HTTP/2 by default for HTTPS connections
+        CURL_SECURE_OPT="${CURL_SECURE_OPT} --http1.1"
+    fi
+
+    #step 1. intentify the protocal scheme
+    for scheme in "https://" "http://"; do
+        http_resp=$(curl --connect-timeout 20 -s -w %{http_code} ${CURL_NOPROXY_OPT} ${CURL_SECURE_OPT} ${scheme}${REGISTRY_BASE}/v2/ 2>/dev/null)
+        if [[ $? -eq 60 ]]; then
+            echo "CA certificate verify failed when contacting registry: $REGISTRY_BASE"
+            return $result
+        fi
+        status_code=${http_resp:0-3}
+        case "$status_code" in
+        200)
+            if [ $(echo -e "$http_resp" | grep "blocked" | wc -l) -ne 0 ]; then #special handling for docker hub
+                continue
+            else
+                AUTH_TYPE=""
+                AUTH_BASE=""
+                AUTH_SERVICE=""
+                result=0
+                break
+            fi
+            ;;
+        401)
+            AUTH_BASE=$(curl -s -I ${CURL_NOPROXY_OPT} ${CURL_SECURE_OPT} ${scheme}${REGISTRY_BASE}/v2/ | grep "realm" | cut -d = -f2 | cut -d , -f1 | tr -d ["\" \r"])
+            AUTH_TYPE=$(curl -s -I ${CURL_NOPROXY_OPT} ${CURL_SECURE_OPT} ${scheme}${REGISTRY_BASE}/v2/ | grep "realm" | cut -d = -f1 | cut -d ' ' -f2)
+            AUTH_SERVICE=$(curl -s -I ${CURL_NOPROXY_OPT} ${CURL_SECURE_OPT} ${scheme}${REGISTRY_BASE}/v2/ | grep "realm" | cut -d , -f2 | cut -d = -f2 | tr -d ["\" \r"])
+            AUTH_SERVICE=${AUTH_SERVICE// /%20} #escape space
+            result=1
+            break
+            ;;
+        *) ;;
+        esac
+    done
+    REGISTRY_HOST=${scheme}${REGISTRY_BASE}
+
+    #step 2. check if the credential is correct
+    if [[ $result -eq 1 ]]; then
+        for ((i = 0; i < $MAX_RETRY; i++)); do
+            if [[ -z "$REG_USERNAME" ]] && [[ -z "$REG_PASSWORD" ]]; then
+                BASICAUTH=""
+            else
+                BASICAUTH="$REG_USERNAME:$REG_PASSWORD"
+            fi
+            case "$AUTH_TYPE" in
+            Basic) #if basic auth, and not credential needed, it is same as anonymous auth
+                token=$(echo -n "$BASICAUTH" | base64 -w0) ;;
+            Bearer)
+                if [ -z "$BEARER_TOKEN" ]; then
+                    if [ -n "$KEY_FILE" ]; then
+                        http_resp=$(curl -s ${CURL_NOPROXY_OPT} ${CURL_SECURE_OPT} -u "$REG_USERNAME:$(cat $KEY_FILE)" "${AUTH_BASE}?service=${AUTH_SERVICE}")
+                    else
+                        local auth_opt=""
+                        if [ -n "$BASICAUTH" ]; then
+                            auth_opt="-u $BASICAUTH"
+                        fi
+                        http_resp=$(curl -s ${CURL_NOPROXY_OPT} ${CURL_SECURE_OPT} $auth_opt "${AUTH_BASE}?service=${AUTH_SERVICE}")
+                    fi
+                    token=$(echo $http_resp | jq -r '.token?')
+                    TOKEN_TYPE="token"
+                    if [ "$token" == "null" ]; then
+                        token=$(echo $http_resp | jq -r '.access_token?')
+                        TOKEN_TYPE="access_token"
+                    fi
+                else
+                    token=$BEARER_TOKEN
+                fi
+                ;;
+            *) ;;
+            esac
+            status_code=$(curl -s -w %{http_code} ${CURL_NOPROXY_OPT} ${CURL_SECURE_OPT} -H "Authorization: $AUTH_TYPE $token" "$REGISTRY_HOST/v2/")
+            status_code=${status_code:0-3}
+            if [ "$status_code" == "200" ]; then
+                result=0
+                break
+            else
+                sleep 2
+            fi
+        done
+    fi
+    return $result
+}
+
+getAuthToken() {
+    local action=$1
+    local repo=$2
+    local curl_cmd="" token=""
+    if [ -z "$AUTH_TYPE" ]; then
+        token=""
+    elif [ -n "$BEARER_TOKEN" ]; then
+        token=$BEARER_TOKEN
+    else
+        if [ "$AUTH_TYPE" == "Basic" ]; then
+            token=$(echo -n "$BASICAUTH" | base64 -w0)
+        else
+            local query_string
+            if [ "$action" == "catalog" ]; then
+                query_string="?service=${AUTH_SERVICE}&scope=repository:catalog:*"
+            else
+                query_string="?service=${AUTH_SERVICE}&scope=repository:${repo}:push,pull"
+            fi
+
+            local basic_auth=""
+            #write_log "debug" "curl -s ${CURL_NOPROXY_OPT} ${CURL_SECURE_OPT} -u *** ${AUTH_BASE}${query_string}"
+            if [ -n "$KEY_FILE" ]; then
+                token=$(curl -s ${CURL_NOPROXY_OPT} ${CURL_SECURE_OPT} -u "$USER_NAME:$(cat $KEY_FILE)" ${AUTH_BASE}${query_string} 2>>$LOGFILE | jq -r ".${TOKEN_TYPE}?")
+            else
+                if [ -n "$BASICAUTH" ]; then
+                    basic_auth="-u $BASICAUTH"
+                fi
+                token=$(curl -s ${CURL_NOPROXY_OPT} ${CURL_SECURE_OPT} ${basic_auth} ${AUTH_BASE}${query_string} 2>>$LOGFILE | jq -r ".${TOKEN_TYPE}?")
+            fi
+            #write_log "debug" "get token=$token"
+        fi
+    fi
+    echo $token
+}
+
+handlePaganation() {
+    local url_path=$1
+    local filter=$2
+    local token=$3
+    local items=""
+    while :; do
+        if [[ "$url_path" =~ "${REGISTRY_HOST}" ]]; then #some registry retrurn the <Link> with full url(e.g. aws), but some return only the path
+            url=$url_path
+        else
+            url=${REGISTRY_HOST}${url_path}
+        fi
+        resp=$(curl -w '\n%{size_header},%{size_download},%{http_code}' -s -i ${CURL_NOPROXY_OPT} ${CURL_SECURE_OPT} -H "Authorization: $AUTH_TYPE $token" "${url}" 2>>$LOGFILE)
+        header_size=$(echo -e "$resp" | awk -F, 'END{print $1}')
+        body_size=$(echo -e "$resp" | awk -F, 'END{print $2}')
+        http_code=$(echo -e "$resp" | awk -F, 'END{print $3}')
+        if [ "$http_code" != "200" ]; then
+            items=""
+            break
+        else
+            body=${resp:$header_size:$body_size}
+            items="${items} $(echo "$body" | jq -r $filter | xargs)"
+            link_header=$(echo -e "$resp" | grep "Link:") #handle pagination
+            if [ -z "$link_header" ]; then
+                break
+            else
+                url_path=$(echo "$link_header" | awk '{print $2}' | tr -d "<>;")
+            fi
+        fi
+    done
+    echo "$items"
+}
+
+getTagsFromRegistry() {
+    local repo=$1
+    local url_path tags token
+    url_path="/v2/${repo}/tags/list"
+    token=$(getAuthToken "tag-list" "$repo")
+    tags=$(handlePaganation "$url_path" ".tags|.[]" "$token")
+    echo "$tags"
+}
+
+getRepoFromRegistry() {
+    local url_path="/v2/_catalog"
+    local token
+    token=$(getAuthToken "catalog")
+    repos=$(handlePaganation "$url_path" ".repositories[]" "$token")
+    echo "$repos"
+}
+
+getRegistryImage() {
+    local images
+    repos=$(getRepoFromRegistry)
+    for repo in $repos; do
+        tags=$(getTagsFromRegistry "$repo")
+        for tag in $tags; do
+            images="$images $repo:$tag"
+        done
+    done
+    echo "$images"
+}
+
+getUnusedImageInLocalRegistry() {
+    UNUSED_IMAGES_OUT=$GLOBAL_PLAT_DIR/unused_images.out
+    >$UNUSED_IMAGES_OUT
+    local regImages usedImages unusedImages found
+    checkRegistryPullsecret
+    if [ $? -eq 0 ]; then
+        echo -n "Get unused images in local registry ... "
+        contactRegistryByCurl
+        if [ $? -eq 0 ]; then
+            #regImages are formatted as: repo:tag
+            regImages=$(getRegistryImage)
+            #usedImages are formatted as: host/repo:tag
+            usedImages=$(kubectl get pods --all-namespaces -o=jsonpath='{range .items[*]}{range .spec.containers[*]}{.image}{"\n"}{end}{end}' | sort -u | grep "localhost:5000" | xargs)
+            for regImage in ${regImages}; do
+                #pause image is always "used"
+                if [[ "$regImage" =~ "pause" ]]; then
+                    continue
+                fi
+                found="false"
+                for usedImage in ${usedImages}; do
+                    repoTag=${usedImage#*/} #remove host part
+                    if [ "$repoTag" == "$regImage" ]; then
+                        found="true"
+                        break
+                    fi
+                done
+                if [ "$found" == "false" ]; then
+                    echo "$regImage" >>$UNUSED_IMAGES_OUT
+                fi
+            done
+        fi
+        echo "exported"
+    fi
+}
+
+main() {
+    DEBUG set -x
+
+    # Reading command line arguments and validating and assigning.
+    while getopts "d:l:P:u:p:" opt; do
+        case $opt in
+        d)
+            SUPPORT_DUMP_DIR=$OPTARG
+            ;;
+        l)
+            LOGFILE=$OPTARG
+            log "LOGFILE assignment is already done."
+            ;;
+        P)
+            PRODUCT=$OPTARG
+            log "Product Name: $PRODUCT"
+            ;;
+        u)
+            USERNAME="$OPTARG"
+            ;;
+        p)
+            PASSWORD="$OPTARG"
+            log "Password is set!"
+            ;;
+        *)
+            echo "invalid option: ${@}"
+            usage
+            ;;
+        esac
+    done
+
+    if [ -z "$SUPPORT_DUMP_DIR" ] || [ -z "$LOGFILE" ]; then
+        usage
+    fi
+
+    log "SUPPORT_DUMP_DIR: $SUPPORT_DUMP_DIR"
+
+    getKubeInfo
+    printKubeInfo
+
+    setDirs $SUPPORT_DUMP_DIR
+
+    [[ $BYOK != "true" ]] &&
+        getK8sContainers
+    [[ $BYOK != "true" ]] &&
+        getContainerImages
+    [[ $BYOK != "true" ]] &&
+        getContainerdConfig
+    getKubeSummaryInfo
+    # getPodImages
+    getPodContainers
+    getSuiteFeatures
+    [[ $BYOK != "true" ]] &&
+        getJournalctl
+    [[ $BYOK != "true" ]] &&
+        getInspect
+    getClusterInfo
+    getDescribe
+    getSuiteDB
+    getSuiteJSON
+    getAllPodLogs
+    [[ $BYOK != "true" ]] &&
+        getKubeStatus
+    getPodsWide
+    getPodsDescribe
+    getUnusedImageInLocalRegistry
+}
+
+# call the main
+main $@

@@ -1,0 +1,188 @@
+#!/bin/bash
+# Copyright 2017 - 2024 Open Text.
+#
+# The only warranties for products and services of Open Text and its affiliates and licensors ("Open Text")
+# are as may be set forth in the express warranty statements accompanying such products and services.
+# Nothing herein should be construed as constituting an additional warranty. Open Text shall not be liable
+# for technical or editorial errors or omissions contained herein. The information contained herein is subject
+# to change without notice.
+#
+# Except as specifically indicated otherwise, this document contains confidential information and a valid
+# license is required for possession, use or copying. If this work is provided to the U.S. Government,
+# consistent with FAR 12.211 and 12.212, Commercial Computer Software, Computer Software
+# Documentation, and Technical Data for Commercial Items are licensed to the U.S. Government under
+# vendor's standard commercial license.
+
+#see feature: OCTFT19S1761772
+if [[ "bash" != "$(readlink /proc/$$/exe | xargs basename)" ]]; then
+    echo "Error: only bash support, current shell: $(readlink /proc/$$/exe)"
+    exit 1
+fi
+set +o posix
+
+source /etc/profile
+
+getRfcTime() {
+    local fmt=$1
+    date --rfc-3339=${fmt} | sed 's/ /T/'
+}
+
+# it logs text to logfile
+log() {
+    local logTimeFmt=$(getRfcTime 'ns')
+    echo -e "$logTimeFmt DEBUG $*" >>$LOGFILE 2>&1
+}
+
+# it logs text to logfile and exits to program by returning exit status 1
+logExit() {
+    local logTimeFmt=$(getRfcTime 'ns')
+    echo -e "$logTimeFmt ERROR $*" >>$LOGFILE 2>&1
+    exit $2
+}
+
+setDirs() {
+    HELM_DUMP_DIR=$SUPPORT_DUMP_DIR/$PRODUCT
+
+    if [ -z "$SUPPORT_DUMP_DIR" ]; then
+        echo Not define support dump dir.
+        exit 1
+    fi
+
+    GLOBAL_HELM_DIR=$HELM_DUMP_DIR/global/helm
+
+    if [ -d $GLOBAL_HELM_DIR ]; then
+        echo Clean helm dump dir ...
+        rm -rf $GLOBAL_HELM_DIR/*
+    fi
+
+    mkdir -p $GLOBAL_HELM_DIR
+}
+
+execCMD() {
+    local cmd=$1
+    local logFile=$2
+
+    echo "============== Command Start ===============" >>$logFile
+    echo "CMD:   $cmd" >>$logFile
+    echo "DATE:  $(date +%c)" >>$logFile
+    echo "-------------------------------" >>$logFile
+    eval $cmd >>$logFile 2>&1
+    echo "=============== Command End ================" >>$logFile
+    echo >>$logFile
+}
+
+showCMD() {
+    local cmd=$1
+    local title=$2
+    local exported_file=$(basename $3)
+    local comments=$4
+
+    echo
+    echo "----------------------------------------------"
+    echo " $title"
+    echo "  Export:   $exported_file"
+    if [ ! -z "$comments" ]; then
+        echo "  Comments: $comments"
+    fi
+    echo "----------------------------------------------"
+    if [ "$title" = "Repo" ]; then
+        local repoOutput=$($cmd 2>&1)
+        # Check if certain string exists in output.
+        if (echo $repoOutput | grep -Eq "^Error.+no.+show"); then
+            echo "No repositories to show."
+        else
+            echo $repoOutput
+        fi
+    else
+        eval $cmd
+    fi
+    echo
+}
+
+getHelmVersion() {
+    # Note that the helm server called Tiller is gone in Helm 3
+    # So there is no need to get the server version in Helm 3
+    local client_version=$(helm version --short)
+    # local server_version=$(helm version -s)
+    # client_version=${client_version#*SemVer:}; client_version=${client_version%%,*}; client_version=$(echo $client_version | tr -d '"')
+    # server_version=${server_version#*SemVer:}; server_version=${server_version%%,*}; server_version=$(echo $server_version | tr -d '"')
+
+    echo "##############################################"
+    echo "  Helm:   client-$client_version"
+    echo "##############################################"
+    echo
+}
+getHelmSummaryInfo() {
+    SUMMARY_HELM_OUT=$GLOBAL_HELM_DIR/helm_summary.out
+    >$SUMMARY_HELM_OUT
+
+    execCMD "helm repo list" $SUMMARY_HELM_OUT
+    showCMD "helm repo list" "Repo" $SUMMARY_HELM_OUT
+
+    execCMD "helm env" $SUMMARY_HELM_OUT
+    showCMD "helm env" "Env" $SUMMARY_HELM_OUT
+
+    execCMD "helm plugin list" $SUMMARY_HELM_OUT
+    showCMD "helm plugin list" "Plugin" $SUMMARY_HELM_OUT
+
+    execCMD "helm list --all-namespaces" $SUMMARY_HELM_OUT
+    showCMD "helm list --all-namespaces" "List" $SUMMARY_HELM_OUT
+
+    # To avoid jq error when output json is null
+    local releases=$(helm list --all-namespaces --output json)
+    local count=$(echo $releases | jq -r '.|length')
+    if [ "$releases" = "[]" ]; then
+        echo "No releases list to show."
+    else
+        for ((i = 0; i < $count; i++)); do
+            local releaseName=$(echo $releases | jq -r ".[$i].name")
+            local namespace=$(echo $releases | jq -r ".[$i].namespace")
+            execCMD "helm status $releaseName -n $namespace" $SUMMARY_HELM_OUT
+            showCMD "helm status $releaseName -n $namespace" "Status" $SUMMARY_HELM_OUT
+
+            execCMD "helm history $releaseName -n $namespace" $SUMMARY_HELM_OUT
+            showCMD "helm history $releaseName -n $namespace" "History" $SUMMARY_HELM_OUT
+        done
+    fi
+}
+
+# display's usage of the script, we dont support this script to be run thru command line
+usage() {
+    echo -e "Usage: \n${@}can only be run through support-dump script."
+    exit 1
+}
+
+main() {
+    # Reading command line arguments and validating and assigning.
+    while getopts "d:l:P:" opt; do
+        case $opt in
+        d)
+            SUPPORT_DUMP_DIR=$OPTARG
+            ;;
+        l)
+            LOGFILE=$OPTARG
+            log "logfiles assignment is already done."
+            ;;
+        P)
+            PRODUCT=$OPTARG
+            log "Product Name: $PRODUCT"
+            ;;
+        *)
+            echo "invalid option: ${@}"
+            usage
+            ;;
+        esac
+    done
+
+    if [ -z "$SUPPORT_DUMP_DIR" ] || [ -z "$LOGFILE" ]; then
+        usage
+    fi
+
+    log "SUPPORT_DUMP_DIR: $SUPPORT_DUMP_DIR"
+    setDirs
+    getHelmVersion
+    getHelmSummaryInfo
+}
+
+# call the main
+main $@
